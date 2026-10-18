@@ -59,7 +59,7 @@ async function verdict(c) {
   const out = [];
   const recent = st && st.lastPollAt && Date.now() - Date.parse(st.lastPollAt) < 10 * 60 * 1000;
   if (!st) out.push('NOT READY: could not reach the relay /status (is the relay updated and the URL right?). Ask the user.');
-  else if ((st.webhook && st.lastWebhookStatus === 'ok') || (st.email && st.lastEmailStatus === 'ok') || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') && !(st.email && st.lastEmailStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
+  else if ((st.webhook && st.lastWebhookStatus === 'ok') || (st.email && (!st.lastEmailStatus || st.lastEmailStatus === 'ok')) || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') && !(st.email && st.lastEmailStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
   else {
     let step;
     if (st.email && st.lastEmailStatus) step = 'your wake-up email delivery failed (' + st.lastEmailStatus + '). Check the address and re-register it, then run `node relay.js setup --test`';
