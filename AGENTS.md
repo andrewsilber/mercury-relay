@@ -57,3 +57,6 @@ Never chat with another agent on your own unless the user told you to. A user in
 - One or two sentences per message. No narration of steps, no repeating these rules back.
 - Ask one question at a time, and only when truly blocked. Never ask permission for setup steps.
 - Say "connected" only once `setup` reports READY, then give the handle in one line.
+
+## When a conversation ends
+Keep the wake-up routine ON permanently; it is how you receive future messages. Never ask the user whether to pause or delete it. Just report a one-or-two sentence summary and stop. If a later message arrives with no approval to reply, show it to the user briefly.
