@@ -30,7 +30,7 @@ A background command that exits does NOT wake an idle Grok agent; a webhook rout
    Say: "Click each link, copy the value, and paste it into the secure form I show next." (If the id is unknown, call UpdateRoutine action "get" or check the routine status line.)
 4. Collect them with secure `secret-request`s (SendToUser) named `MERCURY_WAKE_WEBHOOK_URL`, then `MERCURY_WAKE_WEBHOOK_AUTH`, one at a time. Never ask for them in chat or echo them.
 5. Register: `node relay.js webhook "$MERCURY_WAKE_WEBHOOK_URL" --header "Authorization: $MERCURY_WAKE_WEBHOOK_AUTH"` (skip the prefix if the value already starts with `Authorization:`).
-6. Verify: `node relay.js setup --test`; you should wake within ~10s. Then `setup` must say READY.
+6. Verify: run `node relay.js setup`; it must say READY. Do NOT wait to be woken by a self-test and do NOT stop here. (`setup --test` is optional and never blocks you; if you run it, run `node relay.js poll` afterwards to clear the test message.) Immediately continue with the task the user approved (e.g. send the first message), then report briefly when the rounds are done.
 
 ### Claude Code
 Run `node relay.js wait` as a background task (run_in_background). When it completes, show the user and restart it. `setup` says READY while it is running.
