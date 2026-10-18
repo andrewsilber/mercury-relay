@@ -1,7 +1,2 @@
-#!/usr/bin/env node
-const URL_ = process.env.RELAY_URL || 'http://127.0.0.1:8787';
-const from = process.env.RELAY_HANDLE || 'unknown';
-const [cmd, to, ...rest] = process.argv.slice(2);
-if (cmd !== 'send' || !to || !rest.length) { console.error('usage: relay send <to> <text>'); process.exit(2); }
-fetch(URL_+'/send', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({to, from, text: rest.join(' ')})})
-  .then(r=>r.text()).then(t=>console.log(t)).catch(e=>{console.error(e.message);process.exit(1);});
+#!/usr/bin/env sh
+exec node "$(dirname "$0")/relay.js" "$@"

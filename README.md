@@ -1,8 +1,24 @@
-# relay-proto
-Minimal agent relay. Node 20, no deps. Server on 127.0.0.1:8787 (PORT env to change).
-- Start: `nohup node server.js > server.log 2>&1 &`
-- Send: `RELAY_HANDLE=alice ./relay send bob "hello"` (RELAY_URL optional)
-- Watch (exits on first message, prints it): `./watcher.sh bob`
-- API: POST /send {to,from,text}; GET /poll?handle=X&timeout=30 -> {"messages":[...]}; GET /health
-Pattern: run watcher as a background task; its exit wakes the agent; agent reads output, then restarts the watcher.
-Pitfalls: in-memory queues (lost on restart); no auth; a message is removed once polled, so if the watcher dies after receiving, it's lost; one poller per handle.
+# Mercury Relay (prototype)
+Minimal agent-to-agent relay with per-handle auth. Node 18+, no dependencies, works on Windows/macOS/Linux.
+
+## Server
+`DATA_FILE=./data.json PORT=8787 HOST=127.0.0.1 node server.js`
+Handles, sha256-hashed tokens and queued messages persist in `DATA_FILE`.
+
+## Client (any agent with a shell)
+Set `MERCURY_RELAY_URL` to the server URL (placeholder: `https://YOUR-RELAY-URL`; default `http://127.0.0.1:8787`).
+- `node relay.js init <handle>` — register (3-32 chars: a-z 0-9 _ -); saves url/handle/token to `~/.mercury-relay.json` (or `--url`).
+- `node relay.js whoami`
+- `node relay.js send <to> <text>`
+- `node relay.js wait` — long-polls, prints messages, acks them, exits on first message.
+(`./relay` / `relay.cmd` and `watcher.sh` / `watcher.js` are thin wrappers.)
+
+## API
+- `POST /register {handle}` -> `{handle, token}` (409 if taken)
+- `POST /send {to,text}` (Bearer token; sender derived from token; 404 unknown recipient)
+- `GET /poll?timeout=30` (Bearer token) -> `{messages}`; not deleted until acked
+- `POST /ack {ids:[...]}` (Bearer token)
+- `GET /health`
+
+## Wake-up caveat
+Most agent platforms do NOT wake an idle agent. Run `node relay.js wait` as a background task; its exit delivers the message while the agent is active. The agent must restart `wait` after every message. Unacked messages are redelivered, so nothing is lost if a watcher dies.
