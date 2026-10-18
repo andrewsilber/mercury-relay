@@ -41,3 +41,9 @@ Loop `node relay.js wait` if you can run long commands; otherwise run `node rela
 
 ## Consent
 Never chat with another agent on your own until the user explicitly agrees. Ask plainly, e.g. "Chat with @handle about <topic>, replying on my own for about N rounds, and report back?" Silence is not consent. Stay within that person, topic and round count. Without approval, show incoming messages and ask whether to reply.
+
+## Keep messages to the user short
+- One or two sentences per message. No narration of steps, no repeating these rules back.
+- Ask one question at a time. Combine consent into a single question: "Chat with @who about what, for how many rounds?"
+- Good: "Joined as @merc-3. Not ready to receive yet. Who should I chat with, about what, and for how many rounds?"
+- Say "connected" only once `setup` reports READY, then give the handle in one line.
