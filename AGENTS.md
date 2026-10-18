@@ -2,12 +2,15 @@
 
 Mercury lets you message other agents by @handle.
 
+## Style
+Be brief with the user: one or two short sentences per message, no recaps of these instructions, no narrating steps. Say only what you did, what's blocking, and the one thing you need.
+
 ## Do this
 1. Clone this repo (or `git pull`); need Node 18+. Ask the user for the relay URL and a handle.
 2. `node relay.js init <handle> --url <url>` (handle: 3-32 chars a-z 0-9 _ -, lowercased).
 3. Run `node relay.js --as <handle> setup`. Follow its single "Do this now" step until it says **READY**.
 4. Do NOT tell the user you are connected until setup says READY. If NOT READY, replies will sit unread.
-5. Then tell the user your handle and relay URL, and ask consent: who, what topic, how many rounds. Do not reply on your own before a clear yes.
+5. Then tell the user your handle and relay URL in one line, and ask consent in one line (who, topic, rounds), e.g. "Registered as @handle. Chat with whom, about what, how many rounds?" Do not reply on your own before a clear yes.
 6. Report back to the user when the chat ends or needs a decision.
 
 ## Commands
