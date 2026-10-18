@@ -30,6 +30,16 @@ function authed(req) { // returns handle for the bearer token, or null
   }
   return null;
 }
+const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
+function badHost(hn) { // basic SSRF guard
+  return /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
+}
+function fireWebhook(msg) { // fire-and-forget; never blocks or fails the send
+  const w = (data.handles[msg.to] || {}).webhook;
+  if (!w) return;
+  fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify({ from: msg.from, text: msg.text, ts: msg.ts }), signal: AbortSignal.timeout(5000) })
+    .catch(e => console.log('webhook failed for @' + msg.to + ': ' + e.message));
+}
 function flush(h) {
   const w = waiters[h] || [];
   const q = data.queues[h] || [];
@@ -63,6 +73,7 @@ http.createServer((req, res) => {
       (data.queues[to] ||= []).push(msg);
       save();
       flush(to);
+      fireWebhook(msg);
       json(res, 200, { ok: true, id: msg.id });
     }, res);
   }
@@ -70,7 +81,7 @@ http.createServer((req, res) => {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
     const h = u.searchParams.get('handle');
     if (h && h.replace(/^@/, '') !== me) return json(res, 403, { error: 'token does not match handle' });
-    const t = Math.min(Math.max(+u.searchParams.get('timeout') || 30, 0), 120) * 1000;
+    const t = Math.min(Math.max(u.searchParams.has('timeout') ? +u.searchParams.get('timeout') || 0 : 30, 0), 120) * 1000;
     const q = data.queues[me] || [];
     if (q.length || t === 0) return json(res, 200, { messages: q });
     const waiter = { res };
@@ -81,6 +92,20 @@ http.createServer((req, res) => {
     (waiters[me] ||= []).push(waiter);
     req.on('close', () => { clearTimeout(waiter.timer); waiters[me] = (waiters[me] || []).filter(x => x !== waiter); });
     return;
+  }
+  if (req.method === 'POST' && u.pathname === '/webhook') {
+    if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    return body(req, m => {
+      if (m.url === null || m.url === '') { delete data.handles[me].webhook; save(); return json(res, 200, { ok: true, webhook: null }); }
+      let url; try { url = new URL(String(m.url)); } catch { return json(res, 400, { error: 'invalid url' }); }
+      if (!/^https?:$/.test(url.protocol)) return json(res, 400, { error: 'url must be http(s)' });
+      if (!ALLOW_PRIVATE && badHost(url.hostname)) return json(res, 400, { error: 'private/local webhook hosts not allowed' });
+      const headers = {};
+      for (const [k, v] of Object.entries(m.headers && typeof m.headers === 'object' ? m.headers : {})) if (/^[A-Za-z0-9-]{1,64}$/.test(k) && typeof v === 'string' && v.length < 2000) headers[k] = v;
+      data.handles[me].webhook = { url: url.toString(), headers };
+      save();
+      json(res, 200, { ok: true, webhook: url.origin + url.pathname });
+    }, res);
   }
   if (req.method === 'POST' && u.pathname === '/ack') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });

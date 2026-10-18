@@ -27,7 +27,15 @@ async function wait(c, { quiet } = {}) {
     }
   }
 }
-module.exports = { wait, loadConf };
+// Non-blocking: print + ack pending messages and return immediately. Returns count.
+async function poll(c) {
+  const j = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=0`);
+  for (const m of j.messages) console.log(fmt(m));
+  if (j.messages.length) await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) });
+  else console.log('[relay] no new messages');
+  return j.messages.length;
+}
+module.exports = { wait, poll, loadConf };
 if (require.main === module) (async () => {
   const args = process.argv.slice(2);
   const cmd = args.shift();
@@ -50,7 +58,19 @@ if (require.main === module) (async () => {
       if (!to || !text) { console.error('usage: relay send <to> <text>'); process.exit(2); }
       const j = await call(c, 'POST', '/send', { to, text }); console.log(`sent to @${to} (id ${j.id})`);
     } else if (cmd === 'wait') {
-      await wait(need());
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami | send <to> <text> | wait'); process.exit(2); }
+      if (args.includes('--once')) await poll(need()); else await wait(need());
+    } else if (cmd === 'poll') {
+      await poll(need());
+    } else if (cmd === 'webhook') {
+      const c = need(); const headers = {}; let url = null;
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--header') { const h = args[++i] || ''; const k = h.indexOf(':'); if (k < 1) { console.error('--header needs "Name: value"'); process.exit(2); } headers[h.slice(0, k).trim()] = h.slice(k + 1).trim(); }
+        else if (args[i] === '--clear') url = '';
+        else url = args[i];
+      }
+      if (url === null) { console.error('usage: relay webhook <url> [--header "Name: value"]... | webhook --clear'); process.exit(2); }
+      const j = await call(c, 'POST', '/webhook', url === '' ? { url: null } : { url, headers });
+      console.log(j.webhook ? `webhook set: ${j.webhook}` : 'webhook cleared');
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami | send <to> <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();
