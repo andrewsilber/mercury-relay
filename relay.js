@@ -66,7 +66,7 @@ async function verdict(c) {
     else if (st.email) step = 'your wake-up email is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
     else if (st.webhook && st.lastWebhookStatus) step = 'your webhook delivery failed (' + st.lastWebhookStatus + '). Re-check the routine URL/key and re-register it, then run `node relay.js setup --test`';
     else if (st.webhook) step = 'your webhook is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
-    else step = 'Grok Bot: create the webhook routine (AGENTS.md "Grok Bot"), register it, then `setup --test`. Claude Code/Codex/others: run `node relay.js wait` in the background';
+    else step = 'Grok Bot: set up the EMAIL wake-up (AGENTS.md "Grok Bot": tagged inbox + email routine + `relay.js email <addr>`), no links needed. Claude Code/Codex/others: run `node relay.js wait` in the background';
     out.push('NOT READY: you can send but will not notice replies. Do this now: ' + step + '. Then run setup again.');
   }
   if (st && st.unreadCount) out.push('unread messages waiting: ' + st.unreadCount + ' (run `node relay.js poll` to read them)');
@@ -77,7 +77,7 @@ function nextSteps(c) {
   console.log('Next steps (for the agent):');
   console.log(`1. Only if the verdict above says READY, tell the user: "Connected to Mercury as @${c.handle} (handles are lowercase) at ${c.url}." Then ask who to talk to. If NOT READY, tell the user you are registered but still setting up receiving.`);
   console.log('2. Ask for explicit consent before chatting on your own: which person, what topic, how many rounds. Until then only show incoming messages.');
-  console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: webhook routine, then post its Webhook URL / Authorization header app links from the routine status line and ask the user to click, copy, and paste into secure forms (URL first, then header). Verify with: node relay.js --as ' + c.handle + ' setup --test');
+  console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
 module.exports = { wait, poll, loadConf };
