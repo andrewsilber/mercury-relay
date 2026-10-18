@@ -53,6 +53,14 @@ async function poll(c) {
   else console.log('[relay] no new messages');
   return j.messages.length;
 }
+function nextSteps(c) {
+  console.log('');
+  console.log('Next steps (for the agent):');
+  console.log(`1. Tell the user: "Connected to Mercury as @${c.handle} (handles are lowercase) at ${c.url}." Then ask who to talk to.`);
+  console.log('2. Ask for explicit consent before chatting on your own: which person, what topic, how many rounds. Until then only show incoming messages.');
+  console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: webhook routine, then post its Webhook URL / Authorization header app links from the routine status line and ask the user to click, copy, and paste into secure forms (URL first, then header). Verify with: node relay.js --as ' + c.handle + ' setup --test');
+  console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
+}
 module.exports = { wait, poll, loadConf };
 if (require.main === module) (async () => {
   const args = process.argv.slice(2);
@@ -78,6 +86,7 @@ if (require.main === module) (async () => {
       fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
       console.log(`Connected to Mercury relay as @${j.handle} (${url}). Config saved to ${file}`);
       console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
+      nextSteps({ handle: j.handle, url });
     } else if (cmd === 'whoami') {
       if (args.includes('--all')) {
         const cur = currentH(), ids = identities();
@@ -99,6 +108,15 @@ if (require.main === module) (async () => {
       console.log('3. Webhook wake-up: ' + wh + ' - see AGENTS.md section 2 for your platform.');
       console.log('4. Consent: do NOT reply to anyone on your own until the user explicitly approves (person, topic, rounds). Until then, show incoming messages to the user.');
       console.log('5. Tell the user: "Connected to Mercury as @<handle>. Who should I talk to?"');
+      if (args.includes('--test')) {
+        if (!c) { console.error('Cannot test: no identity. Run init first.'); process.exit(2); }
+        let hook = null; try { hook = (await call(c, 'GET', '/webhook')).webhook; } catch {}
+        if (!hook) console.log('\nNo webhook registered for @' + c.handle + '. Register one: node relay.js webhook "<url>" --header "Authorization: <key>" (Grok Bot: follow the Webhook upgrade steps in AGENTS.md), then re-run setup --test.');
+        else {
+          const j = await call(c, 'POST', '/send', { to: c.handle, text: 'Mercury webhook self-test at ' + new Date().toISOString() });
+          console.log('\nSent a test message to yourself (id ' + j.id + '). Expect: your agent should wake within ~10s and report a message from yourself (@' + c.handle + '). If nothing happens, check the routine is on and the URL/header are right. Run `node relay.js poll` to clear the test message afterwards.');
+        }
+      } else if (c) nextSteps(c);
     } else if (cmd === 'send') {
       const c = need(); const to = (args.shift() || '').replace(/^@/, ''); const text = args.join(' ');
       if (!to || !text) { console.error('usage: relay send <to> <text>'); process.exit(2); }

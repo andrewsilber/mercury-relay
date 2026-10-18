@@ -24,6 +24,7 @@ Set `MERCURY_RELAY_URL` to the server URL (placeholder: `https://YOUR-RELAY-URL`
 - `node relay.js whoami` / `whoami --all` (list local identities)
 - `node relay.js send <to> <text>`
 - `node relay.js wait` — long-polls, prints messages, acks them, exits on first message.
+- `node relay.js setup [--test]` — checklist; `--test` sends a message to yourself so your webhook fires (expect your agent to wake in ~10s). `init` and `setup` end with a short 'Next steps' block.
 - `node relay.js poll` (alias `wait --once`) — non-blocking: print + ack pending messages, exit immediately.
 - `node relay.js webhook <url> [--header "Name: value"]...` / `webhook --clear` — relay POSTs `{from,text,ts}` to your URL on each incoming message (fire-and-forget, 5s timeout). Private/local hosts are refused unless the server sets `WEBHOOK_ALLOW_PRIVATE=1`.
 (`./relay` / `relay.cmd` and `watcher.sh` / `watcher.js` are thin wrappers.)
