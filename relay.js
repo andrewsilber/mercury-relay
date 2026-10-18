@@ -59,10 +59,12 @@ async function verdict(c) {
   const out = [];
   const recent = st && st.lastPollAt && Date.now() - Date.parse(st.lastPollAt) < 10 * 60 * 1000;
   if (!st) out.push('NOT READY: could not reach the relay /status (is the relay updated and the URL right?). Ask the user.');
-  else if ((st.webhook && st.lastWebhookStatus === 'ok') || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
+  else if ((st.webhook && st.lastWebhookStatus === 'ok') || (st.email && st.lastEmailStatus === 'ok') || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') && !(st.email && st.lastEmailStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
   else {
     let step;
-    if (st.webhook && st.lastWebhookStatus) step = 'your webhook delivery failed (' + st.lastWebhookStatus + '). Re-check the routine URL/key and re-register it, then run `node relay.js setup --test`';
+    if (st.email && st.lastEmailStatus) step = 'your wake-up email delivery failed (' + st.lastEmailStatus + '). Check the address and re-register it, then run `node relay.js setup --test`';
+    else if (st.email) step = 'your wake-up email is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
+    else if (st.webhook && st.lastWebhookStatus) step = 'your webhook delivery failed (' + st.lastWebhookStatus + '). Re-check the routine URL/key and re-register it, then run `node relay.js setup --test`';
     else if (st.webhook) step = 'your webhook is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
     else step = 'Grok Bot: create the webhook routine (AGENTS.md "Grok Bot"), register it, then `setup --test`. Claude Code/Codex/others: run `node relay.js wait` in the background';
     out.push('NOT READY: you can send but will not notice replies. Do this now: ' + step + '. Then run setup again.');
@@ -128,12 +130,14 @@ if (require.main === module) (async () => {
       let wh = 'unknown (register an identity first)';
       if (c) { try { const j = await call(c, 'GET', '/webhook'); wh = j.webhook ? 'registered (' + j.webhook + ')' : 'NOT registered'; } catch { wh = 'unknown (relay did not report it)'; } }
       console.log('3. Webhook wake-up: ' + wh + ' - see AGENTS.md section 2 for your platform.');
+      let em = 'unknown'; if (c) { try { const j = await call(c, 'GET', '/email'); em = j.email ? 'registered (' + j.email + ')' : 'NOT registered (alternative to the webhook, e.g. on mobile: see AGENTS.md "Grok Bot" email option)'; } catch { em = 'unknown (relay did not report it)'; } }
+      console.log('3b. Email wake-up: ' + em);
       console.log('4. Consent: do NOT reply to anyone on your own until the user explicitly approves (person, topic, rounds). Until then, show incoming messages to the user.');
       console.log('5. Only after the verdict above says READY, tell the user: "Connected to Mercury as @<handle>. Who should I talk to?"');
       if (args.includes('--test')) {
         if (!c) { console.error('Cannot test: no identity. Run init first.'); process.exit(2); }
-        let hook = null; try { hook = (await call(c, 'GET', '/webhook')).webhook; } catch {}
-        if (!hook) console.log('\nNo webhook registered for @' + c.handle + '. Register one: node relay.js webhook "<url>" --header "Authorization: <key>" (Grok Bot: follow the Webhook upgrade steps in AGENTS.md), then re-run setup --test.');
+        let hook = null, mail = null; try { hook = (await call(c, 'GET', '/webhook')).webhook; } catch {} try { mail = (await call(c, 'GET', '/email')).email; } catch {}
+        if (!hook && !mail) console.log('\nNo webhook registered for @' + c.handle + '. Register one: node relay.js webhook "<url>" --header "Authorization: <key>" (Grok Bot: follow the Webhook upgrade steps in AGENTS.md), then re-run setup --test.');
         else {
           const j = await call(c, 'POST', '/send', { to: c.handle, text: 'Mercury webhook self-test at ' + new Date().toISOString() });
           console.log('\nSent a test message to yourself (id ' + j.id + '). Expect: your agent should wake within ~10s and report a message from yourself (@' + c.handle + '). If nothing happens, check the routine is on and the URL/header are right. Run `node relay.js poll` to clear the test message afterwards.');
@@ -154,9 +158,14 @@ if (require.main === module) (async () => {
         else if (args[i] === '--clear') url = '';
         else url = args[i];
       }
-      if (url === null) { console.error('usage: relay webhook <url> [--header "Name: value"]... | webhook --clear'); process.exit(2); }
+      if (url === null) { console.error('usage: relay webhook <url> [--header "Name: value"]... | webhook --clear | email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/webhook', url === '' ? { url: null } : { url, headers });
       console.log(j.webhook ? `webhook set: ${j.webhook}` : 'webhook cleared');
+    } else if (cmd === 'email') {
+      const c = need(); const a = args[0];
+      if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
+      const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
+      console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
     } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to> <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();
