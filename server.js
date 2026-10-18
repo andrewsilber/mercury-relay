@@ -37,8 +37,10 @@ function badHost(hn) { // basic SSRF guard
 function fireWebhook(msg) { // fire-and-forget; never blocks or fails the send
   const w = (data.handles[msg.to] || {}).webhook;
   if (!w) return;
+  const rec = st => { const h = data.handles[msg.to]; if (h) { h.lastWebhookAt = new Date().toISOString(); h.lastWebhookStatus = st; save(); } };
   fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify({ from: msg.from, text: msg.text, ts: msg.ts }), signal: AbortSignal.timeout(5000) })
-    .catch(e => console.log('webhook failed for @' + msg.to + ': ' + e.message));
+    .then(r => rec(r.ok ? 'ok' : 'http ' + r.status))
+    .catch(e => { console.log('webhook failed for @' + msg.to + ': ' + e.message); rec('error: ' + e.message); });
 }
 function flush(h) {
   const w = waiters[h] || [];
@@ -47,6 +49,7 @@ function flush(h) {
   waiters[h] = [];
   for (const x of w) { clearTimeout(x.timer); json(x.res, 200, { messages: q }); }
 }
+function seen(h) { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); save(); } }
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true });
@@ -77,8 +80,14 @@ http.createServer((req, res) => {
       json(res, 200, { ok: true, id: msg.id });
     }, res);
   }
+  if (req.method === 'GET' && u.pathname === '/status') {
+    if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    const h = data.handles[me];
+    return json(res, 200, { handle: me, webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, unreadCount: (data.queues[me] || []).length, lastPollAt: h.lastSeen || null });
+  }
   if (req.method === 'GET' && u.pathname === '/poll') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    seen(me);
     const h = u.searchParams.get('handle');
     if (h && h.replace(/^@/, '') !== me) return json(res, 403, { error: 'token does not match handle' });
     const t = Math.min(Math.max(u.searchParams.has('timeout') ? +u.searchParams.get('timeout') || 0 : 30, 0), 120) * 1000;
@@ -101,19 +110,21 @@ http.createServer((req, res) => {
   if (req.method === 'POST' && u.pathname === '/webhook') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
     return body(req, m => {
-      if (m.url === null || m.url === '') { delete data.handles[me].webhook; save(); return json(res, 200, { ok: true, webhook: null }); }
+      if (m.url === null || m.url === '') { delete data.handles[me].webhook; delete data.handles[me].lastWebhookStatus; delete data.handles[me].lastWebhookAt; save(); return json(res, 200, { ok: true, webhook: null }); }
       let url; try { url = new URL(String(m.url)); } catch { return json(res, 400, { error: 'invalid url' }); }
       if (!/^https?:$/.test(url.protocol)) return json(res, 400, { error: 'url must be http(s)' });
       if (!ALLOW_PRIVATE && badHost(url.hostname)) return json(res, 400, { error: 'private/local webhook hosts not allowed' });
       const headers = {};
       for (const [k, v] of Object.entries(m.headers && typeof m.headers === 'object' ? m.headers : {})) if (/^[A-Za-z0-9-]{1,64}$/.test(k) && typeof v === 'string' && v.length < 2000) headers[k] = v;
       data.handles[me].webhook = { url: url.toString(), headers };
+      delete data.handles[me].lastWebhookStatus; delete data.handles[me].lastWebhookAt;
       save();
       json(res, 200, { ok: true, webhook: url.origin + url.pathname });
     }, res);
   }
   if (req.method === 'POST' && u.pathname === '/ack') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    seen(me);
     return body(req, m => {
       const ids = new Set(Array.isArray(m.ids) ? m.ids : []);
       const before = (data.queues[me] || []).length;

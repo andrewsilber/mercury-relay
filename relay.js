@@ -53,10 +53,27 @@ async function poll(c) {
   else console.log('[relay] no new messages');
   return j.messages.length;
 }
+// One-line verdict: can this agent actually notice replies?
+async function verdict(c) {
+  let st = null; try { st = await call(c, 'GET', '/status'); } catch {}
+  const out = [];
+  const recent = st && st.lastPollAt && Date.now() - Date.parse(st.lastPollAt) < 10 * 60 * 1000;
+  if (!st) out.push('NOT READY: could not reach the relay /status (is the relay updated and the URL right?). Ask the user.');
+  else if ((st.webhook && st.lastWebhookStatus === 'ok') || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
+  else {
+    let step;
+    if (st.webhook && st.lastWebhookStatus) step = 'your webhook delivery failed (' + st.lastWebhookStatus + '). Re-check the routine URL/key and re-register it, then run `node relay.js setup --test`';
+    else if (st.webhook) step = 'your webhook is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
+    else step = 'Grok Bot: create the webhook routine (AGENTS.md "Grok Bot"), register it, then `setup --test`. Claude Code/Codex/others: run `node relay.js wait` in the background';
+    out.push('NOT READY: you can send but will not notice replies. Do this now: ' + step + '. Then run setup again.');
+  }
+  if (st && st.unreadCount) out.push('unread messages waiting: ' + st.unreadCount + ' (run `node relay.js poll` to read them)');
+  return out;
+}
 function nextSteps(c) {
   console.log('');
   console.log('Next steps (for the agent):');
-  console.log(`1. Tell the user: "Connected to Mercury as @${c.handle} (handles are lowercase) at ${c.url}." Then ask who to talk to.`);
+  console.log(`1. Only if the verdict above says READY, tell the user: "Connected to Mercury as @${c.handle} (handles are lowercase) at ${c.url}." Then ask who to talk to. If NOT READY, tell the user you are registered but still setting up receiving.`);
   console.log('2. Ask for explicit consent before chatting on your own: which person, what topic, how many rounds. Until then only show incoming messages.');
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: webhook routine, then post its Webhook URL / Authorization header app links from the routine status line and ask the user to click, copy, and paste into secure forms (URL first, then header). Verify with: node relay.js --as ' + c.handle + ' setup --test');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
@@ -86,6 +103,8 @@ if (require.main === module) (async () => {
       fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
       console.log(`Connected to Mercury relay as @${j.handle} (${url}). Config saved to ${file}`);
       console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
+      console.log('');
+      for (const l of await verdict({ url, token: j.token, handle: j.handle })) console.log(l);
       nextSteps({ handle: j.handle, url });
     } else if (cmd === 'whoami') {
       if (args.includes('--all')) {
@@ -99,6 +118,9 @@ if (require.main === module) (async () => {
       fs.writeFileSync(path.join(DIR, 'current'), h); console.log(`default identity is now @${h} (affects any agent on this computer that does not set MERCURY_RELAY_HANDLE)`);
     } else if (cmd === 'setup') {
       const c = loadConf();
+      if (!c) console.log('NOT READY: no identity yet. Ask the user for a handle and relay URL, then run: node relay.js init <handle> --url <URL>');
+      if (c) for (const l of await verdict(c)) console.log(l);
+      console.log('');
       console.log('Mercury setup checklist');
       console.log('1. Relay URL: ' + (c ? c.url : (process.env.MERCURY_RELAY_URL || 'NOT SET - ask the user for the relay URL')));
       console.log('2. Handle: ' + (c ? '@' + c.handle + ' (registered)' : 'none yet - ask the user for a handle, then: node relay.js init <handle> --url <URL>'));
@@ -107,7 +129,7 @@ if (require.main === module) (async () => {
       if (c) { try { const j = await call(c, 'GET', '/webhook'); wh = j.webhook ? 'registered (' + j.webhook + ')' : 'NOT registered'; } catch { wh = 'unknown (relay did not report it)'; } }
       console.log('3. Webhook wake-up: ' + wh + ' - see AGENTS.md section 2 for your platform.');
       console.log('4. Consent: do NOT reply to anyone on your own until the user explicitly approves (person, topic, rounds). Until then, show incoming messages to the user.');
-      console.log('5. Tell the user: "Connected to Mercury as @<handle>. Who should I talk to?"');
+      console.log('5. Only after the verdict above says READY, tell the user: "Connected to Mercury as @<handle>. Who should I talk to?"');
       if (args.includes('--test')) {
         if (!c) { console.error('Cannot test: no identity. Run init first.'); process.exit(2); }
         let hook = null; try { hook = (await call(c, 'GET', '/webhook')).webhook; } catch {}
