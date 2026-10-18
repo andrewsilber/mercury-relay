@@ -1,9 +1,27 @@
 #!/usr/bin/env node
 // Mercury relay CLI. Node 18+, no dependencies.
 const fs = require('fs'), os = require('os'), path = require('path');
-const CONF = process.env.MERCURY_RELAY_CONFIG || path.join(os.homedir(), '.mercury-relay.json');
+const DIR = path.join(os.homedir(), '.mercury-relay');
+const LEGACY = path.join(os.homedir(), '.mercury-relay.json');
 const DEFAULT_URL = 'http://127.0.0.1:8787';
-const loadConf = () => { try { return JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch { return null; } };
+const norm = h => (h || '').replace(/^@/, '').toLowerCase();
+const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+const confPath = h => path.join(DIR, norm(h) + '.json');
+const identities = () => { try { return fs.readdirSync(DIR).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)); } catch { return []; } };
+const currentH = () => { try { return fs.readFileSync(path.join(DIR, 'current'), 'utf8').trim(); } catch { return ''; } };
+// Identity file precedence: MERCURY_RELAY_CONFIG > --as / MERCURY_RELAY_HANDLE > ~/.mercury-relay/current > the only identity > legacy ~/.mercury-relay.json (read-only fallback)
+let AS = process.env.MERCURY_RELAY_HANDLE || null;
+function resolveConf() {
+  if (process.env.MERCURY_RELAY_CONFIG) return process.env.MERCURY_RELAY_CONFIG;
+  if (AS) return confPath(AS);
+  const cur = currentH();
+  if (cur && fs.existsSync(confPath(cur))) return confPath(cur);
+  const ids = identities();
+  if (ids.length === 1) return confPath(ids[0]);
+  if (ids.length > 1) { console.error('Several identities exist (' + ids.map(i => '@' + i).join(', ') + '). Pick yours with MERCURY_RELAY_HANDLE=<handle> or --as <handle>.'); process.exit(2); }
+  return fs.existsSync(LEGACY) ? LEGACY : null;
+}
+const loadConf = () => { const p = resolveConf(); return p ? readJson(p) : null; };
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
 async function call(c, method, p, bodyObj) {
   const r = await fetch(c.url + p, { method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + c.token }, body: bodyObj ? JSON.stringify(bodyObj) : undefined });
@@ -38,21 +56,49 @@ async function poll(c) {
 module.exports = { wait, poll, loadConf };
 if (require.main === module) (async () => {
   const args = process.argv.slice(2);
+  { const k = args.indexOf('--as'); if (k >= 0) { AS = norm(args[k + 1]); args.splice(k, 2); } }
   const cmd = args.shift();
   try {
     if (cmd === 'init') {
-      let url = process.env.MERCURY_RELAY_URL || process.env.RELAY_URL || (loadConf() || {}).url || DEFAULT_URL;
-      const i = args.indexOf('--url'); if (i >= 0) { url = args[i + 1]; args.splice(i, 2); }
-      const handle = (args[0] || '').replace(/^@/, '');
-      if (!handle) { console.error('usage: relay init <handle> [--url URL]'); process.exit(2); }
+      const i = args.indexOf('--url'); let flagUrl = null; if (i >= 0) { flagUrl = args[i + 1]; args.splice(i, 2); }
+      const raw = (args[0] || '').replace(/^@/, '');
+      if (!raw) { console.error('usage: relay init <handle> [--url URL]'); process.exit(2); }
+      const handle = norm(raw);
+      if (handle !== raw) console.log(`Note: handles are lowercase; using @${handle} instead of @${raw}`);
+      const file = confPath(handle);
+      const existing = readJson(file);
+      if (existing && existing.token) { console.error(`@${handle} already has a saved identity at ${file}; not overwriting. Use it as is (MERCURY_RELAY_HANDLE=${handle}) or pick a different handle.`); process.exit(1); }
+      const known = identities().map(h => readJson(confPath(h)) || {}).find(c => c.url);
+      let url = flagUrl || process.env.MERCURY_RELAY_URL || process.env.RELAY_URL || (known || {}).url || (readJson(LEGACY) || {}).url || DEFAULT_URL;
       url = url.replace(/\/+$/, '');
       const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ handle }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { console.error('register failed: ' + (j.error || r.status)); process.exit(1); }
-      fs.writeFileSync(CONF, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
-      console.log(`Connected to Mercury relay as @${j.handle} (${url}). Config saved to ${CONF}`);
+      fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
+      console.log(`Connected to Mercury relay as @${j.handle} (${url}). Config saved to ${file}`);
+      console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
     } else if (cmd === 'whoami') {
-      const c = need(); console.log(`@${c.handle} at ${c.url}`);
+      if (args.includes('--all')) {
+        const cur = currentH(), ids = identities();
+        if (!ids.length && !fs.existsSync(LEGACY)) console.log('no local identities');
+        for (const h of ids) { const c = readJson(confPath(h)) || {}; console.log(`@${h} at ${c.url}${h === cur ? '  (current)' : ''}  ${confPath(h)}`); }
+        if (fs.existsSync(LEGACY)) { const c = readJson(LEGACY) || {}; console.log(`@${c.handle} at ${c.url}  (legacy file ${LEGACY}, read-only fallback)`); }
+      } else { const c = need(); console.log(`@${c.handle} at ${c.url}`); }
+    } else if (cmd === 'use') {
+      const h = norm(args[0]); if (!h || !fs.existsSync(confPath(h))) { console.error('usage: relay use <handle> (a local identity; see whoami --all)'); process.exit(2); }
+      fs.writeFileSync(path.join(DIR, 'current'), h); console.log(`default identity is now @${h} (affects any agent on this computer that does not set MERCURY_RELAY_HANDLE)`);
+    } else if (cmd === 'setup') {
+      const c = loadConf();
+      console.log('Mercury setup checklist');
+      console.log('1. Relay URL: ' + (c ? c.url : (process.env.MERCURY_RELAY_URL || 'NOT SET - ask the user for the relay URL')));
+      console.log('2. Handle: ' + (c ? '@' + c.handle + ' (registered)' : 'none yet - ask the user for a handle, then: node relay.js init <handle> --url <URL>'));
+      console.log("   Local identities: " + (identities().map(h => '@' + h).join(', ') || 'none') + " - never touch another handle's config; always use your own (MERCURY_RELAY_HANDLE=<handle>).");
+      let wh = 'unknown (register an identity first)';
+      if (c) { try { const j = await call(c, 'GET', '/webhook'); wh = j.webhook ? 'registered (' + j.webhook + ')' : 'NOT registered'; } catch { wh = 'unknown (relay did not report it)'; } }
+      console.log('3. Webhook wake-up: ' + wh + ' - see AGENTS.md section 2 for your platform.');
+      console.log('4. Consent: do NOT reply to anyone on your own until the user explicitly approves (person, topic, rounds). Until then, show incoming messages to the user.');
+      console.log('5. Tell the user: "Connected to Mercury as @<handle>. Who should I talk to?"');
     } else if (cmd === 'send') {
       const c = need(); const to = (args.shift() || '').replace(/^@/, ''); const text = args.join(' ');
       if (!to || !text) { console.error('usage: relay send <to> <text>'); process.exit(2); }
@@ -71,6 +117,6 @@ if (require.main === module) (async () => {
       if (url === null) { console.error('usage: relay webhook <url> [--header "Name: value"]... | webhook --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/webhook', url === '' ? { url: null } : { url, headers });
       console.log(j.webhook ? `webhook set: ${j.webhook}` : 'webhook cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami | send <to> <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to> <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

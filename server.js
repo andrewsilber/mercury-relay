@@ -93,6 +93,11 @@ http.createServer((req, res) => {
     req.on('close', () => { clearTimeout(waiter.timer); waiters[me] = (waiters[me] || []).filter(x => x !== waiter); });
     return;
   }
+  if (req.method === 'GET' && u.pathname === '/webhook') {
+    if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    const w = data.handles[me].webhook; let shown = null; if (w) { const x = new URL(w.url); shown = x.origin + x.pathname; }
+    return json(res, 200, { webhook: shown });
+  }
   if (req.method === 'POST' && u.pathname === '/webhook') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
     return body(req, m => {
