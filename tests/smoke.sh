@@ -104,6 +104,27 @@ sleep 3
 OUT="$($R --as qqb poll)"; echo "$OUT" | grep -q "no new messages" || { kill $SRV3; sfail "messages did not expire: $OUT"; }
 kill $SRV3
 echo "PASS: queue cap (429 per recipient), message TTL expiry, limits in /health"
+# wake-up coalescing + daily email cap (fake Resend + webhook receiver)
+RP=$((PORT + 3)); WP=$((PORT + 4)); WU="http://127.0.0.1:$WP"
+node -e 'require("http").createServer((q,r)=>{let b="";q.on("data",c=>b+=c).on("end",()=>{require("fs").appendFileSync(process.argv[2],q.url+" "+b+"\n");r.end("{}")})}).listen(+process.argv[1],"127.0.0.1")' "$RP" "$TMP/hits.log" & RCV=$!
+(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_MIN_INTERVAL=8s EMAIL_DAILY_MAX=1 RESEND_API_KEY=test EMAIL_FROM=relay@test.invalid RESEND_API_URL="http://127.0.0.1:$RP/email" PORT=$WP DATA_FILE="$TMP/w.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV4=$!
+for i in $(seq 50); do curl -sf "$WU/health" >/dev/null && break; sleep 0.1; done
+touch "$TMP/hits.log"
+$R init wka --url "$WU" >/dev/null; $R init wkb --url "$WU" >/dev/null
+$R --as wkb webhook "http://127.0.0.1:$RP/hook" >/dev/null && $R --as wkb email wkb@test.invalid >/dev/null
+for i in 1 2 3; do $R --as wka send wkb "w$i" >/dev/null; done; sleep 0.5
+[ "$(grep -c '^/hook' "$TMP/hits.log")" = 1 ] && [ "$(grep -c '^/email' "$TMP/hits.log")" = 1 ] || sfail "wakes not coalesced: $(cat "$TMP/hits.log")"
+$R --as wkb poll >/dev/null
+$R --as wka send wkb "w4" >/dev/null; $R --as wka send wkb "w5" >/dev/null; sleep 0.5
+[ "$(grep -c '^/hook' "$TMP/hits.log")" = 1 ] || sfail "min interval not enforced"
+for i in $(seq 100); do [ "$(grep -c '^/hook' "$TMP/hits.log")" = 2 ] && break; sleep 0.1; done
+[ "$(grep -c '^/hook' "$TMP/hits.log")" = 2 ] || sfail "deferred wake missing: $(cat "$TMP/hits.log")"
+grep '^/hook' "$TMP/hits.log" | tail -1 | grep -q '"count":2' || sfail "wake count: $(tail -1 "$TMP/hits.log")"
+[ "$(grep -c '^/email' "$TMP/hits.log")" = 1 ] || sfail "daily email cap not enforced"
+H="$(curl -s "$WU/health")"; echo "$H" | grep -q '"emailsToday":1' && echo "$H" | grep -q '"emailsSkippedToday":1' || sfail "health email stats: $H"
+grep '^/email' "$TMP/hits.log" | grep -q 'Relay: message for @wkb' || sfail "email subject: $(grep '^/email' "$TMP/hits.log")"
+kill $SRV4 $RCV
+echo "PASS: wake coalescing (pending until poll, min interval, deferred wake with count), daily email cap, email stats"
 # migration of an old (pre-spaces) data file
 MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"
 LH="$(node -e 'console.log(require("crypto").createHash("sha256").update("legacy-0123456789ab").digest("hex"))')"

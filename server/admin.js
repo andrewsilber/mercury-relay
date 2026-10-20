@@ -24,7 +24,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
   }
   function stats() {
     const today = new Date().toISOString().slice(0, 10);
-    return { handles: Object.keys(data.handles).length, messagesToday: data.stats.day === today ? data.stats.count : 0, queued: Object.values(data.queues).reduce((n, q) => n + q.length, 0), suspended: data.settings.suspended };
+    return { handles: Object.keys(data.handles).length, messagesToday: data.stats.day === today ? data.stats.count : 0, queued: Object.values(data.queues).reduce((n, q) => n + q.length, 0), suspended: data.settings.suspended, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped, emailDailyMax: relay.limits.emailDailyMax };
   }
   return function admin(req, res, u) {
     if (!PW) { res.writeHead(503, { 'content-type': 'text/plain' }); return res.end('admin disabled'); }

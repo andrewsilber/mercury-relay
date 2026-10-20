@@ -33,7 +33,7 @@ const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
 function createRelay({ store, notifier, limits = {} }) {
-  const L = { msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const L = { wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 5 * 60e3, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
   const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
   data.handles ||= {}; data.queues ||= {};
@@ -118,7 +118,7 @@ function createRelay({ store, notifier, limits = {} }) {
     data.queues[h] = q.filter(m => Date.parse(m.ts) >= cut); if (data.queues[h].length !== n) save();
   }
   setInterval(() => { for (const h of Object.keys(data.queues)) expire(h); }, Math.min(60e3, Math.max(1e3, L.msgTtlMs / 2))).unref();
-  const seen = h => { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); seenDirty = true; } };
+  const seen = h => { const x = data.handles[h]; if (x) { x.lastSeen = new Date().toISOString(); seenDirty = true; if (x.wakePending) { x.wakePending = false; save(); } } }; // any poll/wait/ack re-arms wake-ups
 
   const msgLog = [], sendTimes = {}, pairTimes = {};
   const recent = (arr, win, now) => { while (arr.length && arr[0] <= now - win) arr.shift(); return arr; };
@@ -141,15 +141,36 @@ function createRelay({ store, notifier, limits = {} }) {
     if (data.stats.day !== day) data.stats = { day, count: 0 };
     data.stats.count++;
   }
-  function notify(msg) {
-    const h = data.handles[msg.to] || {};
-    const rec = kind => st => { const x = data.handles[msg.to]; if (x) { x['last' + kind + 'At'] = new Date().toISOString(); x['last' + kind + 'Status'] = st; save(); } };
-    if (h.webhook) notifier.webhook(msg, h.webhook, rec('Webhook'));
-    if (h.email) notifier.email(msg, h.email, rec('Email'));
+  // Wake-up coalescing: one wake per handle until it polls again, and at most one per WAKE_MIN_INTERVAL.
+  // Messages arriving during the interval get a single deferred wake. Self-tests (from === to) bypass coalescing.
+  data.emailStats ||= { day: '', sent: 0, skipped: 0 };
+  const today = () => new Date().toISOString().slice(0, 10);
+  const emailDay = () => { if (data.emailStats.day !== today()) data.emailStats = { day: today(), sent: 0, skipped: 0 }; return data.emailStats; };
+  const wakeTimers = {};
+  function fireWake(to, msg) {
+    const h = data.handles[to]; if (!h) return;
+    const count = (data.queues[to] || []).length; if (!count) return;
+    h.wakePending = true; h.lastWakeAt = new Date().toISOString(); save();
+    const rec = kind => st => { const x = data.handles[to]; if (x) { x['last' + kind + 'At'] = new Date().toISOString(); x['last' + kind + 'Status'] = st; save(); } };
+    const info = { count };
+    if (h.webhook) notifier.webhook(msg, h.webhook, rec('Webhook'), info);
+    if (h.email) {
+      const es = emailDay();
+      if (es.sent >= L.emailDailyMax) { es.skipped++; save(); console.log(`email wake for ${to} skipped: daily cap ${L.emailDailyMax} reached`); rec('Email')('skipped: relay daily email cap reached'); }
+      else { if (notifier.canEmail) { es.sent++; save(); } notifier.email(msg, h.email, rec('Email'), info); }
+    }
   }
-
+  function notify(msg) {
+    const to = msg.to, h = data.handles[to]; if (!h || (!h.webhook && !h.email)) return;
+    if (msg.from === to) return fireWake(to, msg);
+    if (h.wakePending || wakeTimers[to]) return;
+    const wait = (h.lastWakeAt ? Date.parse(h.lastWakeAt) + L.wakeMinIntervalMs : 0) - Date.now();
+    if (wait <= 0) return fireWake(to, msg);
+    wakeTimers[to] = setTimeout(() => { delete wakeTimers[to]; const x = data.handles[to]; if (x && !x.wakePending) fireWake(to, msg); }, wait);
+    wakeTimers[to].unref && wakeTimers[to].unref();
+  }
   const relay = {
-    limits: L, data, waiters, msgLog, flush, save, flushStore, auth,
+    limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth,
     register(m, { ip = '' } = {}) {
       const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
       const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);

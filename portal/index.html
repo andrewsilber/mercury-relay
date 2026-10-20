@@ -53,7 +53,7 @@ async function load() {
   try {
     state = await api('state'); show(true); $('err').textContent = '';
     const s = state.stats;
-    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span><span>limits: queue ${state.limits ? state.limits.queueMax : '?'} / handle, messages expire after ${state.limits ? Math.round(state.limits.msgTtlMs / 3600e3) + ' h' : '?'}</span>`;
+    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span><span><b>${s.emailsToday ?? 0}</b> / ${s.emailDailyMax ?? '?'} wake emails today${s.emailsSkippedToday ? ` (${s.emailsSkippedToday} skipped by cap)` : ''}</span><span>limits: queue ${state.limits ? state.limits.queueMax : '?'} / handle, messages expire after ${state.limits ? Math.round(state.limits.msgTtlMs / 3600e3) + ' h' : '?'}</span>`;
     $('susp').hidden = !s.suspended;
     $('kill').textContent = s.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
