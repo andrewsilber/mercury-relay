@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relay admin</title>
+<style>
+body{font:14px system-ui,sans-serif;margin:0;background:#f6f6f4;color:#222}
+header{background:#222;color:#fff;padding:10px 16px;display:flex;gap:16px;align-items:center}
+header h1{font-size:16px;margin:0;flex:1}
+main{padding:16px;max-width:1100px;margin:auto}
+section{background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #eee;vertical-align:top}
+.stats span{display:inline-block;margin-right:24px}.stats b{font-size:20px}
+button{cursor:pointer;padding:3px 8px}.danger{background:#b22;color:#fff;border:0;border-radius:3px}
+.banner{background:#b22;color:#fff;padding:8px 16px;font-weight:bold}
+.muted{color:#a60}.blocked{color:#b22}.active{color:#282}
+input[type=number]{width:80px}#login{max-width:320px;margin:80px auto}
+pre{white-space:pre-wrap;margin:0;font-size:12px;background:#f3f3f3;padding:4px}
+.err{color:#b22}
+</style></head><body>
+<div id="login" hidden><section><h2>Relay admin</h2>
+<form id="lf"><input type="password" id="pw" placeholder="Admin password" autofocus required style="width:100%;box-sizing:border-box"><p><button>Log in</button> <span class="err" id="lerr"></span></p></form></section></div>
+<div id="app" hidden>
+<header><h1>Relay admin</h1><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
+<div class="banner" id="susp" hidden>Relay is SUSPENDED: sends are rejected and waits return nothing.</div>
+<main>
+<section><h2>Stats</h2><div class="stats" id="stats"></div></section>
+<section><h2>Controls</h2>
+<p><button id="kill" class="danger"></button></p>
+<p>Max messages per conversation pair per hour <input type="number" min="0" id="pair"> &nbsp;
+Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p></section>
+<section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
+<section><h2>Recent messages <label style="font-weight:normal;font-size:13px"><input type="checkbox" id="showtext"> show text</label></h2>
+<table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></section>
+<p class="err" id="err"></p>
+</main></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when = s => s ? new Date(s).toLocaleString() : '—';
+let state;
+async function api(path, opts = {}) {
+  const r = await fetch('/admin/api/' + path, { ...opts, headers: { 'content-type': 'application/json', 'x-admin': '1' }, credentials: 'same-origin' });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== 'login') { show(false); throw new Error('not logged in'); }
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b || {}) });
+function show(app) { $('app').hidden = !app; $('login').hidden = app; }
+async function load() {
+  try {
+    state = await api('state'); show(true); $('err').textContent = '';
+    const s = state.stats;
+    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span>`;
+    $('susp').hidden = !s.suspended;
+    $('kill').textContent = s.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
+    if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
+    if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
+    $('handles').innerHTML = state.handles.map(h => `<tr><td>@${esc(h.handle)}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
+      ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
+      <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
+    const withText = $('showtext').checked; $('texth').hidden = !withText;
+    const m = await api('messages' + (withText ? '?text=1' : ''));
+    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>@${esc(x.from)}</td><td>@${esc(x.to)}</td><td>${x.size} B</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
+  } catch (e) { if (e.message !== 'not logged in') $('err').textContent = e.message; }
+}
+const act = f => async () => { try { await f(); } catch (e) { $('err').textContent = e.message; } load(); };
+$('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = '';
+  try { await post('login', { password: $('pw').value }); $('pw').value = ''; load(); } catch (e) { $('lerr').textContent = e.message; } };
+$('logout').onclick = act(() => post('logout'));
+$('refresh').onclick = load;
+$('showtext').onchange = load;
+$('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
+$('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));
+$('handles').onclick = ev => { const b = ev.target;
+  if (b.dataset.s) act(() => post('handles/' + b.dataset.h + '/status', { status: b.dataset.s }))();
+  if (b.dataset.del && confirm('Delete @' + b.dataset.del + ' and its queued messages? This cannot be undone.')) act(() => api('handles/' + b.dataset.del, { method: 'DELETE' }))(); };
+load(); setInterval(() => { if (!$('app').hidden) load(); }, 15000);
+</script></body></html>

@@ -3,6 +3,7 @@ FROM node:20-alpine
 WORKDIR /app
 COPY server.js ./
 COPY server/ ./server/
+COPY portal/ ./portal/
 ENV HOST=0.0.0.0 PORT=8787 DATA_FILE=/data/data.json
 VOLUME /data
 EXPOSE 8787

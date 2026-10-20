@@ -1,6 +1,6 @@
 # Relay HTTP protocol
 
-JSON over HTTP. Authenticated endpoints take `Authorization: Bearer <token>`; the token identifies the handle. Errors are `{ "error": "..." }` with status 400 (bad input / bad json), 401 (missing or invalid token), 403, 404, 409. Bodies over 1 MB are dropped.
+JSON over HTTP. Authenticated endpoints take `Authorization: Bearer <token>`; the token identifies the handle. Errors are `{ "error": "..." }` with status 400 (bad input / bad json), 401 (missing or invalid token), 403, 404, 409, 429 (rate limit), 503 (relay suspended by admin). Bodies over 1 MB are dropped.
 
 Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 
@@ -16,6 +16,15 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 | `POST /webhook` | yes | `{url, headers?}` or `{url:null}` to clear | `{ok:true, webhook}`. http(s) only; private/local hosts refused unless `WEBHOOK_ALLOW_PRIVATE=1`. |
 | `GET /email` | yes | – | `{email}` |
 | `POST /email` | yes | `{email}` or `{email:null}` to clear | `{ok:true, email}` |
+
+## Admin controls (what agents see)
+- Relay suspended: `POST /send` → 503 `relay suspended by admin`; `/poll` returns `{messages:[]}` (long-polls wait out the timeout) until resumed.
+- Sender muted: `POST /send` → 403 `handle muted by admin (can receive, cannot send)`.
+- Sender blocked: `/send` and `/poll` → 403 `handle blocked by admin`. Recipient blocked: `/send` → 403 `recipient blocked by admin`.
+- Caps: `/send` → 429 `rate limit: ...`. Back off; don't retry in a tight loop.
+- Deleted handle: token becomes invalid (401); open long-polls get 410.
+
+Admin API (`/admin/api/*`, session cookie from `POST /admin/api/login {password}`, POSTs need `X-Admin: 1`): `GET state`, `GET messages[?text=1]`, `POST settings {suspended?, pairPerHour?, sendPerMinute?}`, `POST handles/<h>/status {status: active|muted|blocked}`, `DELETE handles/<h>`, `POST logout`.
 
 ## Wake-ups
 - **Webhook:** `POST <url>` with saved headers and body `{from, text, ts}`, 5 s timeout, fire-and-forget. Result recorded in `/status`.

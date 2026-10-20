@@ -13,6 +13,9 @@ const EMAIL_RE = /^[^\s@<>,;]{1,64}@[^\s@<>,;]{1,255}$/;
 
 let data = { handles: {}, queues: {} }; // handles: handle -> {tokenHash, created}; queues: handle -> [msgs]
 try { data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); data.handles ||= {}; data.queues ||= {}; } catch {}
+data.settings ||= {}; data.settings.suspended = !!data.settings.suspended;
+data.settings.pairPerHour = +data.settings.pairPerHour || 0; data.settings.sendPerMinute = +data.settings.sendPerMinute || 0;
+data.stats ||= { day: '', count: 0 };
 function save() {
   const tmp = DATA_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data));
@@ -57,6 +60,8 @@ function sendEmail(msg) { // fire-and-forget wake-up email; never blocks or fail
     .catch(e => { console.log('email failed for @' + msg.to + ': ' + e.message); rec('error: ' + e.message); });
 }
 function flush(h) {
+  if (data.settings.suspended) return;
+  if ((data.handles[h] || {}).status === 'blocked') return;
   const w = waiters[h] || [];
   const q = data.queues[h] || [];
   if (!w.length || !q.length) return;
@@ -64,8 +69,35 @@ function flush(h) {
   for (const x of w) { clearTimeout(x.timer); json(x.res, 200, { messages: q }); }
 }
 function seen(h) { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); save(); } }
+// --- admin state (in-memory) ---
+const msgLog = []; // ring buffer of recent messages
+const sendTimes = {}; // handle -> [ms]
+const pairTimes = {}; // "a|b" -> [ms]
+function recent(arr, win, now) { while (arr.length && arr[0] <= now - win) arr.shift(); return arr; }
+function checkSend(me, to) { // returns [code, error] or null
+  if (data.settings.suspended) return [503, 'relay suspended by admin'];
+  const st = (data.handles[me] || {}).status;
+  if (st === 'blocked') return [403, 'handle blocked by admin'];
+  if (st === 'muted') return [403, 'handle muted by admin (can receive, cannot send)'];
+  if ((data.handles[to] || {}).status === 'blocked') return [403, 'recipient blocked by admin'];
+  const now = Date.now(), s = data.settings;
+  const st1 = recent(sendTimes[me] ||= [], 60e3, now), pk = [me, to].sort().join('|'), st2 = recent(pairTimes[pk] ||= [], 3600e3, now);
+  if (s.sendPerMinute > 0 && st1.length >= s.sendPerMinute) return [429, 'rate limit: max ' + s.sendPerMinute + ' sends per minute per handle'];
+  if (s.pairPerHour > 0 && st2.length >= s.pairPerHour) return [429, 'rate limit: max ' + s.pairPerHour + ' messages per hour between @' + me + ' and @' + to];
+  st1.push(now); st2.push(now);
+  return null;
+}
+function logMsg(msg) {
+  msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, size: Buffer.byteLength(msg.text), text: msg.text });
+  if (msgLog.length > 500) msgLog.shift();
+  const day = msg.ts.slice(0, 10);
+  if (data.stats.day !== day) data.stats = { day, count: 0 };
+  data.stats.count++;
+}
+const admin = require('./admin.js')({ data, save, json, body, waiters, msgLog, flush });
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
+  if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true });
   if (req.method === 'POST' && u.pathname === '/register') {
     return body(req, m => {
@@ -86,8 +118,10 @@ http.createServer((req, res) => {
       const to = String(m.to || '').replace(/^@/, '');
       if (!to || !m.text) return json(res, 400, { error: 'to and text required' });
       if (!data.handles[to]) return json(res, 404, { error: 'unknown recipient' });
+      const deny = checkSend(me, to); if (deny) return json(res, deny[0], { error: deny[1] });
       const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, text: String(m.text), ts: new Date().toISOString() };
       (data.queues[to] ||= []).push(msg);
+      logMsg(msg);
       save();
       flush(to);
       fireWebhook(msg);
@@ -105,8 +139,10 @@ http.createServer((req, res) => {
     seen(me);
     const h = u.searchParams.get('handle');
     if (h && h.replace(/^@/, '') !== me) return json(res, 403, { error: 'token does not match handle' });
+    if (data.handles[me].status === 'blocked') return json(res, 403, { error: 'handle blocked by admin' });
     const t = Math.min(Math.max(u.searchParams.has('timeout') ? +u.searchParams.get('timeout') || 0 : 30, 0), 120) * 1000;
-    const q = data.queues[me] || [];
+    const q = data.settings.suspended ? [] : (data.queues[me] || []);
+    if (data.settings.suspended && t === 0) return json(res, 200, { messages: [] });
     if (q.length || t === 0) return json(res, 200, { messages: q });
     const waiter = { res };
     waiter.timer = setTimeout(() => {

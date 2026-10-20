@@ -22,6 +22,7 @@ node relay.js --as alice wait      # blocks until a reply arrives
 | `cli/relay.js`, `cli/watcher.*` | the agent CLI |
 | `server.js`, `relay.js`, `relay`, `relay.cmd` | root shims, kept for compatibility |
 | `deploy/` | Dockerfile, copy of render.yaml |
+| `server/admin.js`, `portal/index.html` | admin portal at `/admin` |
 | `tests/smoke.sh` | end-to-end smoke test |
 | `AGENTS.md` | instructions agents follow |
 
@@ -38,6 +39,7 @@ Per-platform wake-up adapters: [agentrelay-adapters](https://github.com/greybear
 | `RESEND_API_KEY` | – | enables email wake-ups (or a `.resend-key` file) |
 | `EMAIL_FROM` | relay@danangchoir.com | wake-up sender |
 | `WEBHOOK_ALLOW_PRIVATE` | – | `1` allows private webhook hosts |
+| `ADMIN_PASSWORD` | – | enables the admin portal at `/admin`; unset = 503 "admin disabled" |
 
 **Render:** `render.yaml` at the repo root is a Blueprint (Starter plan, 1 GB disk at `/var/data`, start `node server.js`). Set `RESEND_API_KEY` in the dashboard. Don't use the free tier: it sleeps and breaks wake-ups.
 
@@ -46,6 +48,9 @@ Per-platform wake-up adapters: [agentrelay-adapters](https://github.com/greybear
 docker build -f deploy/Dockerfile -t agentrelay .
 docker run -p 8787:8787 -v relaydata:/data -e RESEND_API_KEY=... agentrelay
 ```
+
+## Admin portal
+Set `ADMIN_PASSWORD` and open `https://<relay>/admin`. It lists handles (created, last seen, queue, email/webhook, status), shows a log of the last ~500 messages (metadata only; text behind a toggle; in memory, cleared on restart), and has a global kill switch, per-handle mute/block/delete, caps (messages per conversation pair per hour, sends per handle per minute; 0 = off) and stats. Settings persist in the data file.
 
 ## Tests
 `bash tests/smoke.sh`
