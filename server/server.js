@@ -11,8 +11,9 @@ if (!RESEND_KEY) { for (const d of [process.cwd(), path.join(__dirname, '..'), _
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const store = DATABASE_URL ? createPgStore({ url: DATABASE_URL, schema: process.env.DATABASE_SCHEMA || 'public', saveMs: +process.env.SAVE_MS || 200 }) : createFileStore({ file: DATA_FILE, saveMs: +process.env.SAVE_MS || 200 });
 (async () => { await store.init();
+const parseSize = v => { const m = /^(\d+)\s*([kKmM]?)[bB]?$/.exec(String(v || '').trim()); return m ? +m[1] * ({ k: 1024, m: 1048576 }[m[2].toLowerCase()] || 1) : 0; };
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
-const limits = { adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
+const limits = { attachMax: parseSize(process.env.ATTACH_MAX) || 256 * 1024, adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
 const backup = DATABASE_URL ? { enabled: false, reason: 'postgres: use your provider\'s backups plus GET /admin/api/export' } : require('./backup.js')({ getData: () => relay.data, dir: process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(DATA_FILE)), 'backups'), intervalMs: process.env.BACKUP_INTERVAL != null && process.env.BACKUP_INTERVAL !== '' ? parseDur(process.env.BACKUP_INTERVAL) : 6 * 3600e3, keep: Math.max(1, +process.env.BACKUP_KEEP || 14), firstDelayMs: +process.env.BACKUP_FIRST_DELAY_MS || 60e3 });
 // Flush pending writes on deploy/restart so nothing is lost.
@@ -20,10 +21,12 @@ const flushOnExit = () => { try { relay.flushStore(); } catch (e) { console.erro
 process.on('exit', flushOnExit); // sync path (file store); Postgres writes are drained in the signal handler below
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { flushOnExit(); Promise.race([store.close(), new Promise(r => setTimeout(r, 8000))]).catch(e => console.error('final save failed: ' + e.message)).finally(() => process.exit(0)); });
 
+const BODY_MAX = () => Math.max(1e6, Math.ceil(relay.limits.attachMax * 4 / 3) + 256 * 1024); // base64 attachments + envelope/JSON overhead
 function json(res, code, obj) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); }
 function body(req, cb, res) {
-  let b = ''; req.on('data', d => { b += d; if (b.length > 1e6) req.destroy(); });
-  req.on('end', () => { try { cb(JSON.parse(b || '{}')); } catch { json(res, 400, { error: 'bad json' }); } });
+  let b = '', over = false; const max = BODY_MAX();
+  req.on('data', d => { if (over) return; b += d; if (b.length > max) { over = true; b = ''; json(res, 413, { error: `message too large: request body exceeds ${Math.round(max / 1024)} KB (attachments are limited to ${Math.round(relay.limits.attachMax / 1024)} KB, ATTACH_MAX)` }); req.resume(); } });
+  req.on('end', () => { if (over) return; try { cb(JSON.parse(b || '{}')); } catch { json(res, 400, { error: 'bad json' }); } });
 }
 // Client IP: the rightmost X-Forwarded-For entry (added by the hosting proxy; leftmost entries are client-controlled).
 const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); };
@@ -53,7 +56,7 @@ http.createServer((req, res) => {
     if (!f.startsWith(root + path.sep)) { res.writeHead(404); return res.end(); }
     return fs.readFile(f, (e, b) => { if (e) { res.writeHead(404); return res.end('not found'); } res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store' }); res.end(b); });
   }
-  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, publicUrl: publicUrl(req), limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];

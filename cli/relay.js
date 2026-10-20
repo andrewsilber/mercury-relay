@@ -24,6 +24,8 @@ function resolveConf() {
   return fs.existsSync(LEGACY) ? LEGACY : null;
 }
 const e2e = require('./e2e.js');
+const files = require('../core/files.js');
+const FILES_DIR = path.join(DIR, 'files');
 // Addresses: "bob" = bob in my space, "bob@acme" = bob in space acme, "bob@public" = public bob. Canonical form matches the relay's keys.
 const mySpace = c => c.space || (c.handle.includes('@') ? c.handle.split('@')[1] : 'public');
 function canon(c, a) {
@@ -54,13 +56,13 @@ async function peerKeys(c, h) { // fetch + pin (trust on first use)
   return k;
 }
 async function openMsg(c, m) {
-  if (!m.enc) return `[relay] from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`;
+  if (!m.enc) return [`[relay] from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`, ...files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]')].join('\n');
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
     const others = r.cc.filter(h => h !== c.handle && h !== m.from);
     if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others, id: m.id }; saveConf(c); }
-    return `[relay] from ${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => disp(c, h)).join(', ') : ''} at ${m.ts} (id ${m.id}${r.re && r.verified ? ', re ' + r.re : ''}) [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
+    return `[relay] from ${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => disp(c, h)).join(', ') : ''} at ${m.ts} (id ${m.id}${r.re && r.verified ? ', re ' + r.re : ''}) [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}` + files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]').map(l => '\n' + l).join('');
   } catch (e) { return `[relay] from ${disp(c, m.from)} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
@@ -200,12 +202,18 @@ if (isMain) (async () => {
     } else if (cmd === 'send' || cmd === 'reply-all') {
       const c = need(); let list, text;
       let force = false; for (let k; (k = args.indexOf('--force')) >= 0;) { force = true; args.splice(k, 1); }
+      const fpaths = []; for (let k; (k = args.indexOf('--file')) >= 0;) { const f = args[k + 1]; if (!f) { console.error('--file needs a path'); process.exit(2); } fpaths.push(f); args.splice(k, 2); }
       let re = null; const ri = args.indexOf('--re'); if (ri >= 0) { re = args[ri + 1]; args.splice(ri, 2); if (!re) { console.error('--re needs a message id'); process.exit(2); } }
       if (cmd === 'send') { list = (args.shift() || '').split(',').filter(x => x.trim()).map(x => canon(c, x.trim())); text = args.join(' '); }
       else { const g = c.lastGroup; if (!g) { console.error('no group message to reply to yet'); process.exit(2); } list = [g.from, ...g.cc]; text = args.join(' '); re ||= g.id || null; }
       list = [...new Set(list)].filter(h => cmd === 'send' || h !== c.handle);
-      if (!list.length || !text) { console.error('usage: relay send <to>[,<to2>,...] [--re <msgId>] [--force] <text> | reply-all [--force] <text>'); process.exit(2); }
-      await ensureKeys(c); let failed = 0;
+      if (!list.length || !text) { console.error('usage: relay send <to>[,<to2>,...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text>'); process.exit(2); }
+      await ensureKeys(c); let failed = 0, att = null;
+      if (fpaths.length) {
+        let max = +ENV('ATTACH_MAX') || +process.env.ATTACH_MAX || files.ATTACH_MAX_DEFAULT;
+        try { const h = await (await fetch(c.url + '/health')).json(); if (h && +h.attachMax) max = Math.min(max, +h.attachMax); } catch {}
+        try { att = files.readFiles(fpaths, max); } catch (e) { console.error('cannot attach: ' + e.message); process.exit(2); }
+      }
       if (process.env.AGENTRELAY_NEWER_CHECK === '0') force = true; // test/automation escape hatch (same as --force)
       if (!force) { // newer-message check: unread messages mean you'd reply to a stale view of the conversation
         const pj = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=0`).catch(() => ({ messages: [] }));
@@ -219,8 +227,8 @@ if (isMain) (async () => {
       for (const to of list) {
         try {
           const pk = await peerKeys(c, to), cc = list.length > 1 ? list : null;
-          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(to), enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc, { re }) } : { to: wire(to), text: (cc ? `[group: ${cc.map(h => disp(c, h)).join(', ')}] ` : '') + (re ? `[re ${re}] ` : '') + text });
-          console.log(`sent to ${disp(c, to)} (id ${j.id})${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : disp(c, to) + ' has no key yet') + ']'}`);
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(to), enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc, { re, files: att }) } : { to: wire(to), text: (cc ? `[group: ${cc.map(h => disp(c, h)).join(', ')}] ` : '') + (re ? `[re ${re}] ` : '') + text, ...(att ? { files: att } : {}) });
+          console.log(`sent to ${disp(c, to)} (id ${j.id})${att ? ' with ' + att.length + ' attachment' + (att.length > 1 ? 's' : '') : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : disp(c, to) + ' has no key yet') + ']'}`);
         } catch (e) { failed++; console.log(`FAILED to ${disp(c, to)}: ${e.message}`); }
       }
       if (failed) process.exit(1);
@@ -267,6 +275,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--force] <text> | reply-all [--force] <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

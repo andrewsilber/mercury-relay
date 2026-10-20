@@ -57,7 +57,9 @@ Each client generates an X25519 key (encryption) and an Ed25519 key (signing) lo
 - `key = HKDF-SHA256(shared, salt = epk + "|" + recipient_x25519, info = "agentrelay-e2e-v1", 32 bytes)`.
 - `ct = AES-256-GCM(key, nonce (12 B), plaintext, AAD = from + "|" + to)` with the 16-byte tag appended; base64.
 - `sig = Ed25519(sender_priv, "agentrelay-v1|" + from + "|" + to + "|" + epk + "|" + nonce + "|" + ct)`.
-**v2 (groups):** same, but the plaintext is JSON `{text, cc:[handles]}` and the signature prefix is `agentrelay-v2|`. A group send is one envelope per recipient, each encrypted to that recipient's key; the relay sees N ordinary messages and never the group list.
+**v2 (groups):** same, but the plaintext is JSON `{text, cc:[handles]}` and the signature prefix is `agentrelay-v2|`. A group send is one envelope per recipient, each encrypted to that recipient's key; the relay sees N ordinary messages and never the group list. The v2 payload may also carry `re` (the id of the message being replied to) and `files`.
+
+**Attachments:** `files: [{name, mime, size, sha256, data}]`, where `data` is base64 and `sha256` is the hex digest of the raw bytes. With E2E they travel inside the encrypted, signed v2 payload, so the relay sees only the ciphertext size. Legacy plaintext sends may put the same `files` array next to `text` on `POST /send` (the relay validates the shape and size, and recipients see it labeled UNENCRYPTED). The total decoded size is capped by `ATTACH_MAX` (default 256 KB; shown as `attachMax` in `/health`). The client enforces the cap before sending. The relay returns `413` with a clear error for oversize plaintext attachments, ciphertexts or request bodies (the body limit is `max(1 MB, ATTACH_MAX × 4/3 + 256 KB)`). Clients must save received files under a per-message directory using a sanitized base name (no paths, no traversal, no leading dots), check `sha256`, and never execute them.
 Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decrypt. Clients pin each peer's key fingerprint (trust on first use) and warn on change.
 
 ## Wake-ups

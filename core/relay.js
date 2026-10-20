@@ -1,4 +1,5 @@
 // relay-core: all relay logic, no HTTP. createRelay({ store, notifier }) -> methods returning { code, body }.
+const { checkFiles } = require('./files.js');
 const crypto = require('crypto');
 const { addr } = require('./address.js');
 const HANDLE_RE = /^[a-z0-9_-]{3,32}$/;
@@ -33,7 +34,7 @@ const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
 function createRelay({ store, notifier, limits = {} }) {
-  const L = { adminLogMax: Math.max(1, Math.floor(+limits.adminLogMax || 1000)), wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const L = { attachMax: Math.max(1024, Math.floor(+limits.attachMax || 256 * 1024)), adminLogMax: Math.max(1, Math.floor(+limits.adminLogMax || 1000)), wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
   const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
   data.handles ||= {}; data.queues ||= {};
@@ -135,7 +136,7 @@ function createRelay({ store, notifier, limits = {} }) {
     return null;
   }
   function logMsg(msg) {
-    msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, encrypted: !!msg.enc, size: msg.enc ? Buffer.byteLength(msg.enc.ct, 'base64') - 16 : Buffer.byteLength(msg.text), text: msg.enc ? '(end-to-end encrypted)' : msg.text });
+    msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, encrypted: !!msg.enc, size: msg.enc ? Buffer.byteLength(msg.enc.ct, 'base64') - 16 : Buffer.byteLength(msg.text) + (msg.files || []).reduce((n, f) => n + f.size, 0), files: msg.files ? msg.files.length : undefined, text: msg.enc ? '(end-to-end encrypted)' : msg.text });
     while (msgLog.length > L.adminLogMax) msgLog.shift();
     const day = msg.ts.slice(0, 10);
     if (data.stats.day !== day) data.stats = { day, count: 0 };
@@ -266,12 +267,14 @@ function createRelay({ store, notifier, limits = {} }) {
       const to = a.key, mySpace = spaceOf(me);
       if (a.space !== mySpace) return err(403, `cross-space messaging is not enabled (you are in ${mySpace}, ${addr(a.key)} is in ${a.space}); space-to-space grants are coming later`);
       if (enc && !validEnc(enc)) return err(400, 'invalid encrypted envelope');
+      if (enc && Buffer.byteLength(enc.ct, 'base64') > Math.max(1e6, Math.ceil(L.attachMax * 4 / 3) + 256 * 1024)) return err(413, `message too large (attachments are limited to ${Math.round(L.attachMax / 1024)} KB, ATTACH_MAX)`);
+      if (!enc) { const fe = checkFiles(m.files, L.attachMax); if (fe) return err(fe.startsWith('attachments too large') ? 413 : 400, fe); }
       if (!enc && S.requireEncryption) return err(400, 'this relay requires end-to-end encryption; update the CLI (git pull) and retry');
       if (!data.handles[to]) return err(404, 'unknown recipient');
       expire(to); if ((data.queues[to] || []).length >= L.queueMax) return err(429, 'recipient queue full (' + L.queueMax + ' unread messages); try again later');
       const deny = checkSend(me, to); if (deny) return deny;
       const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, ts: new Date().toISOString() };
-      if (enc) msg.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; }
+      if (enc) msg.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; if (m.files && m.files.length) msg.files = m.files.map(f => ({ name: String(f.name).slice(0, 255), mime: String(f.mime || 'application/octet-stream').slice(0, 100), size: Buffer.byteLength(f.data, 'base64'), sha256: String(f.sha256 || '').slice(0, 64), data: f.data })); }
       (data.queues[to] ||= []).push(msg);
       logMsg(msg); save(); flush(to); notify(msg);
       return ok({ ok: true, id: msg.id });

@@ -71,7 +71,29 @@ $R --as smoke-b poll >/dev/null
 $R --as smoke-a send smoke-g "unread for g" >/dev/null
 AGENTRELAY_NEWER_CHECK=1 $R --as smoke-g send --force smoke-a "forced" | grep -q "sent to" || efail "--force"
 $R --as smoke-a send --re abc-123 smoke-g "explicit re" >/dev/null; $R --as smoke-g poll | grep -q "re abc-123).*explicit re" || efail "--re"
-echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged, group reply-all with signed re, newer-message check, --force, --re"
+# --- inline file attachments ---
+FD="$HOME/.mercury-relay/files"; mkdir -p "$TMP/att"; head -c 5000 /dev/urandom > "$TMP/att/blob.bin"; printf 'hello file\n' > "$TMP/att/note.txt"
+$R --as smoke-a send smoke-b "with files" --file "$TMP/att/note.txt" --file "$TMP/att/blob.bin" | grep -q "with 2 attachments \[end-to-end encrypted\]" || efail "send with files"
+DUMP data | grep -q "hello file" && efail "attachment plaintext on relay"
+AO="$($R --as smoke-b poll)"; FID="$(echo "$AO" | sed -nE 's/.*\(id ([0-9a-f-]+)\).*with files.*/\1/p')"
+echo "$AO" | grep -q "attachment: $FD/$FID/note.txt (11 B, sha256 ok)" && echo "$AO" | grep -q "attachment: $FD/$FID/blob.bin (4.9 KB, sha256 ok)" || efail "attachment save: $AO"
+cmp -s "$TMP/att/blob.bin" "$FD/$FID/blob.bin" || efail "attachment bytes differ"
+[ -x "$FD/$FID/note.txt" ] && efail "attachment saved executable"
+GA="$($R --as smoke-a send smoke-b,smoke-g "group file" --file "$TMP/att/note.txt")"; [ "$(echo "$GA" | grep -c 'with 1 attachment')" = 2 ] || efail "group file send: $GA"
+$R --as smoke-g poll | grep -q "attachment: .*note.txt (11 B, sha256 ok)" || efail "group file at g"
+$R --as smoke-b poll | grep -q "attachment: .*note.txt (11 B, sha256 ok)" || efail "group file at b"
+head -c 300000 /dev/urandom > "$TMP/att/big.bin"
+set +e; BO="$($R --as smoke-a send smoke-b "too big" --file "$TMP/att/big.bin" 2>&1)"; BRC=$?; set -e
+[ "$BRC" = 2 ] && echo "$BO" | grep -q "attachments too large.*ATTACH_MAX" || efail "size cap: rc=$BRC $BO"
+$R --as smoke-b poll | grep -q "too big" && efail "oversize was sent"
+B64BIG="$(base64 -w0 "$TMP/att/big.bin")"; printf '{"to":"smoke-a","text":"x","files":[{"name":"big.bin","data":"%s"}]}' "$B64BIG" > "$TMP/att/big.json"
+curl -s -H "authorization: Bearer $TOK" --data-binary @"$TMP/att/big.json" "$URL/send" | grep -q "attachments too large" || efail "relay size cap"
+EV="$(printf '#!/bin/sh\necho pwned\n' | base64 -w0)"
+curl -s -H "authorization: Bearer $TOK" -d "{\"to\":\"smoke-a\",\"text\":\"evil\",\"files\":[{\"name\":\"../../../evil.sh\",\"data\":\"$EV\"},{\"name\":\"..\",\"data\":\"$EV\"},{\"name\":\"/etc/passwd\",\"data\":\"$EV\"}]}" "$URL/send" | grep -q '"ok":true' || efail "plaintext file send"
+TO="$($R --as smoke-a poll)"; echo "$TO" | grep -q "attachment \[UNENCRYPTED\]: $FD/[0-9a-f-]*/evil.sh .*renamed from" && echo "$TO" | grep -q "/file (" && echo "$TO" | grep -q "/passwd (" || efail "traversal names: $TO"
+[ -e "$HOME/evil.sh" ] || [ -e "$HOME/.mercury-relay/evil.sh" ] || [ -e "$FD/evil.sh" ] && efail "path traversal wrote outside the message dir"
+find "$FD" -type f -perm -u+x | grep -q . && efail "some attachment is executable"
+echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged, group reply-all with signed re, newer-message check, --force, --re, file attachments (round-trip, group, cap, traversal)"
 # --- spaces ---
 sfail() { echo "FAIL: $*"; exit 1; }
 SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; [ -n "$CODE" ] || sfail "space create: $SC1"
