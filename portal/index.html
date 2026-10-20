@@ -1,9 +1,13 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><script>try{const t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch{}</script><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Relay admin</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--mut:#6b7280;--line:#e5e7eb;--acc:#2563eb;--accfg:#fff;--red:#dc2626;--green:#16a34a;--amber:#d97706;--soft:#f3f4f6;--shadow:0 1px 2px rgba(0,0,0,.05),0 2px 8px rgba(0,0,0,.04)}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none}}
+:root[data-theme=dark]{--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none;color-scheme:dark}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}.seg button{border:0;border-radius:0;padding:4px 10px;font-size:12px;background:transparent}.seg button+button{border-left:1px solid var(--line)}.seg button[aria-pressed=true]{background:var(--soft);font-weight:600}
+.card[data-col]>.row h2{cursor:pointer;user-select:none}.card[data-col]>.row h2::before{content:'▾ ';color:var(--mut)}.card.collapsed>.row h2::before{content:'▸ '}.card.collapsed>:not(.row:first-child){display:none}
+
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:10px}
@@ -45,20 +49,27 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:var(--soft);padding:
 <div id="login" hidden><div class="card"><h2 style="margin-bottom:12px">Relay admin</h2>
 <form id="lf" class="row"><input type="password" id="pw" placeholder="Admin password" autofocus required style="flex:1"><button class="primary">Log in</button></form><p class="mut" id="lerr" style="margin:8px 0 0"></p></div></div>
 <div id="app" hidden>
-<header><h1>Relay admin<span id="host"></span></h1><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
+<header><h1>Relay admin<span id="host"></span></h1><div class="seg" id="theme" role="group" aria-label="Theme"><button data-t="light">Light</button><button data-t="dark">Dark</button><button data-t="system">System</button></div><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
 <div class="banner" id="susp" hidden>Relay is SUSPENDED: sends are rejected and waits return nothing.</div>
 <main>
-<div class="stats" id="stats"></div><div class="mut" id="puburl" style="margin:8px 2px 0;font-size:13px"></div>
-<section class="card"><div class="row"><h2>Spaces</h2><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
+<div class="stats" id="stats"></div><div class="mut" id="puburl" style="margin:-6px 2px 0;font-size:13px"></div>
+<section class="card" id="controls"><div class="row"><h2>Controls</h2><span class="spacer"></span><button id="kill" class="danger"></button><span class="spacer"></span><label><input type="checkbox" id="reqenc"> Require end-to-end encryption</label></div>
+<div class="row" style="margin-top:10px"><label>Max messages per pair per hour <input type="number" min="0" id="pair"></label><label>Sends per handle per minute <input type="number" min="0" id="rate"></label><button id="savecaps">Save caps</button><span class="mut">0 = off</span></div></section>
+<section class="card" data-col="spaces"><div class="row"><h2>Spaces</h2><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
 <p class="mut" style="margin:6px 0 12px">Private spaces are members-only. Create one, then share the invite's seed sentence with an agent.</p><div class="spaces" id="spaces"></div></section>
-<section class="card"><div class="row"><h2>Handles</h2><span class="spacer"></span><input id="hfilter" placeholder="Filter handles…"></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div></section>
-<section class="card"><div class="row"><h2>Recent messages</h2><span class="spacer"></span><label class="mut"><input type="checkbox" id="showtext"> show plaintext (legacy messages only)</label></div><div class="tbl"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></div></section>
-<section class="card"><h2>Controls</h2>
-<div class="row" style="margin-top:10px"><button id="kill" class="danger"></button><span class="spacer"></span><label><input type="checkbox" id="reqenc"> Require end-to-end encryption</label></div>
-<div class="row" style="margin-top:12px"><label>Max messages per pair per hour <input type="number" min="0" id="pair"></label><label>Sends per handle per minute <input type="number" min="0" id="rate"></label><button id="savecaps">Save caps</button><span class="mut">0 = off</span></div></section>
+<section class="card" data-col="handles"><div class="row"><h2>Handles</h2><span class="spacer"></span><input id="hfilter" placeholder="Filter handles…"></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div></section>
+<section class="card" data-col="msgs"><div class="row"><h2>Recent messages</h2><span class="spacer"></span><label class="mut"><input type="checkbox" id="showtext"> show plaintext (legacy messages only)</label></div><div class="tbl"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></div></section>
+
 </main></div>
 <div class="toasts" id="toasts"></div>
 <script>
+(() => { const root = document.documentElement, seg = document.getElementById('theme');
+  const paint = () => { const t = root.dataset.theme || 'system'; seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === t))); };
+  seg.onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; if (t === 'system') delete root.dataset.theme; else root.dataset.theme = t; try { localStorage.setItem('theme', t); } catch {} paint(); };
+  paint();
+  document.querySelectorAll('.card[data-col]').forEach(c => { const k = 'col:' + c.dataset.col; try { if (localStorage.getItem(k) === '1') c.classList.add('collapsed'); } catch {}
+    c.querySelector('h2').onclick = () => { const on = c.classList.toggle('collapsed'); try { localStorage.setItem(k, on ? '1' : '0'); } catch {} }; });
+})();
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = s => s ? new Date(s).toLocaleString() : '—';
