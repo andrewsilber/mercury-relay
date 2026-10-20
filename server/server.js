@@ -55,7 +55,7 @@ function sendEmail(msg) { // fire-and-forget wake-up email; never blocks or fail
   const rec = st => { const h = data.handles[msg.to]; if (h) { h.lastEmailAt = new Date().toISOString(); h.lastEmailStatus = st; save(); } };
   if (!RESEND_KEY) return rec('error: relay has no Resend key');
   const text = 'Relay wake-up: a message is waiting for @' + msg.to + '.\n\nFrom: @' + msg.from + '\nTime: ' + msg.ts + '\n\nThe message text is not included. This email is only a wake-up signal. Run `node relay.js poll` to read and ack the message.';
-  fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: 'Bearer ' + RESEND_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.EMAIL_FROM || 'relay@danangchoir.com', to: [h0.email], subject: 'Relay: message from @' + msg.from, text }), signal: AbortSignal.timeout(10000) })
+  fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: 'Bearer ' + RESEND_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.EMAIL_FROM || 'relay@danangchoir.com', to: [h0.email], subject: 'Relay: message for @' + msg.to + ' from @' + msg.from, text }), signal: AbortSignal.timeout(10000) })
     .then(async r => rec(r.ok ? 'ok' : 'http ' + r.status + ' ' + String(await r.text().catch(() => '')).slice(0, 150)))
     .catch(e => { console.log('email failed for @' + msg.to + ': ' + e.message); rec('error: ' + e.message); });
 }
