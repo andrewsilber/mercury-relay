@@ -28,7 +28,7 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:#f3f3f3;padding:4px}
 <p><button id="kill" class="danger"></button></p>
 <p>Max messages per conversation pair per hour <input type="number" min="0" id="pair"> &nbsp;
 Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p><p><label><input type="checkbox" id="reqenc"> Require end-to-end encryption (reject plaintext sends)</label></p></section>
-<section><h2>Spaces</h2><table><thead><tr><th>Space</th><th>Owner</th><th>Members</th><th>Created</th><th></th></tr></thead><tbody id="spaces"></tbody></table><p>New space <input id="spname" placeholder="acme"> <button id="spcreate">Create space + invite</button> <span id="spout"></span></p></section>
+<section><h2>Spaces</h2><table><thead><tr><th>Space</th><th>Owner</th><th>Members</th><th>Created</th><th></th></tr></thead><tbody id="spaces"></tbody></table><p>New space <input id="spname" placeholder="acme"> <button id="spcreate">Create space + invite</button> </p><div id="spout"></div></section>
 <section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Space</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
 <section><h2>Recent messages <label style="font-weight:normal;font-size:13px"><input type="checkbox" id="showtext"> show text</label></h2>
 <table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></section>
@@ -73,7 +73,13 @@ $('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = ''
 $('logout').onclick = act(() => post('logout'));
 $('refresh').onclick = load;
 $('showtext').onchange = load;
-const showInv = r => { $('spout').textContent = `Invite for ${r.space}: ${r.invite} (${r.maxUses} uses, expires ${when(r.expires)})`; };
+const showInv = r => {
+  const seed = `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> in ${r.space} with invite ${r.invite}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
+  const o = $('spout'); o.innerHTML = '';
+  const mk = (label, val) => { const d = document.createElement('div'); const i = document.createElement('input'); i.readOnly = true; i.value = val; i.size = Math.min(val.length + 2, 110); i.onclick = () => i.select(); const b = document.createElement('button'); b.textContent = 'Copy'; b.onclick = async () => { try { await navigator.clipboard.writeText(val); } catch { i.select(); document.execCommand('copy'); } b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); }; d.append(label + ' ', i, ' ', b); o.append(d); };
+  mk('Invite code:', r.invite); mk('Seed sentence:', seed);
+  const n = document.createElement('div'); n.textContent = `${r.maxUses} use(s), expires ${when(r.expires)}. Replace <handle> before sending.`; o.append(n);
+};
 $('spcreate').onclick = act(async () => showInv(await post('spaces', { name: $('spname').value.trim() })));
 $('spaces').onclick = ev => { const n = ev.target.dataset && ev.target.dataset.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '7d' })))(); };
 $('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
