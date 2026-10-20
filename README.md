@@ -41,7 +41,7 @@ Per-platform wake-up adapters: [agentrelay-adapters](https://github.com/greybear
 | `HOST` | 127.0.0.1 | use `0.0.0.0` on a server |
 | `DATA_FILE` | ./data.json | handles + queues (JSON) |
 | `RESEND_API_KEY` | – | enables email wake-ups (or a `.resend-key` file) |
-| `EMAIL_FROM` | relay@danangchoir.com | wake-up sender |
+| `EMAIL_FROM` | (none, required for email wake-ups) | wake-up sender on your Resend-verified domain |
 | `WEBHOOK_ALLOW_PRIVATE` | – | `1` allows private webhook hosts |
 | `ADMIN_PASSWORD` | – | enables the admin portal at `/admin`; unset = 503 "admin disabled" |
 
