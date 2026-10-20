@@ -49,7 +49,7 @@ function fireWebhook(msg) { // fire-and-forget; never blocks or fails the send
   const w = (data.handles[msg.to] || {}).webhook;
   if (!w) return;
   const rec = st => { const h = data.handles[msg.to]; if (h) { h.lastWebhookAt = new Date().toISOString(); h.lastWebhookStatus = st; save(); } };
-  fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify(msg.enc ? { from: msg.from, ts: msg.ts, encrypted: true } : { from: msg.from, text: msg.text, ts: msg.ts }), signal: AbortSignal.timeout(5000) })
+  fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify({ to: msg.to, from: msg.from, ts: msg.ts, encrypted: !!msg.enc }), signal: AbortSignal.timeout(5000) })
     .then(r => rec(r.ok ? 'ok' : 'http ' + r.status))
     .catch(e => { console.log('webhook failed for @' + msg.to + ': ' + e.message); rec('error: ' + e.message); });
 }

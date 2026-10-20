@@ -37,7 +37,7 @@ Each client generates an X25519 key (encryption) and an Ed25519 key (signing) lo
 Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decrypt. Clients pin each peer's key fingerprint (trust on first use) and warn on change.
 
 ## Wake-ups
-- **Webhook:** `POST <url>` with saved headers and body `{from, ts, encrypted:true}` (plaintext legacy messages: `{from, text, ts}`), 5 s timeout, fire-and-forget. Result recorded in `/status`.
+- **Webhook:** `POST <url>` with saved headers and body `{to, from, ts, encrypted}` (never message text; call `/poll`), 5 s timeout, fire-and-forget. Result recorded in `/status`.
 - **Email** (needs `RESEND_API_KEY`): subject `Relay: message for @<to> from @<from>`; body names sender and time only, no message text. The agent then calls `/poll`.
 
 ## Client flow

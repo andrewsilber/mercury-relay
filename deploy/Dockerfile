@@ -4,8 +4,9 @@ WORKDIR /app
 COPY server.js ./
 COPY server/ ./server/
 COPY portal/ ./portal/
-ENV HOST=0.0.0.0 PORT=8787 DATA_FILE=/data/data.json
-VOLUME /data
+RUN mkdir -p /var/data && chown node:node /var/data
+ENV HOST=0.0.0.0 PORT=8787 DATA_FILE=/var/data/data.json
+VOLUME /var/data
 EXPOSE 8787
 USER node
 CMD ["node", "server.js"]
