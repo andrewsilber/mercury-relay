@@ -48,7 +48,7 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:var(--soft);padding:
 <header><h1>Relay admin<span id="host"></span></h1><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
 <div class="banner" id="susp" hidden>Relay is SUSPENDED: sends are rejected and waits return nothing.</div>
 <main>
-<div class="stats" id="stats"></div>
+<div class="stats" id="stats"></div><div class="mut" id="puburl" style="margin:8px 2px 0;font-size:13px"></div>
 <section class="card"><div class="row"><h2>Spaces</h2><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
 <p class="mut" style="margin:6px 0 12px">Private spaces are members-only. Create one, then share the invite's seed sentence with an agent.</p><div class="spaces" id="spaces"></div></section>
 <section class="card"><div class="row"><h2>Handles</h2><span class="spacer"></span><input id="hfilter" placeholder="Filter handles…"></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div></section>
@@ -96,7 +96,8 @@ function confirmModal({ title, text, ok = 'Confirm', danger, typeToConfirm }) {
     m.querySelector('[data-x]').onclick = () => close(false); okb.onclick = () => close(true);
   });
 }
-const seedFor = code => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${code}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
+const pub = () => (state && state.publicUrl) || location.origin;
+const seedFor = code => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${code}` + (pub() === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${pub()}.`);
 async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); } catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
   if (btn) { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1500); } toast('Copied to clipboard');
@@ -126,6 +127,7 @@ function inviteModal(space, inv) {
 // --- rendering ---
 function renderStats() {
   const s = state.stats, L = state.limits || {};
+  $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
   const card = (v, label, sub) => `<div class="stat"><b>${v}</b><small>${label}${sub ? ' · ' + sub : ''}</small></div>`;
   $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:14px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
 }

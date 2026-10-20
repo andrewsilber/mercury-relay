@@ -225,7 +225,8 @@ if (isMain) (async () => {
       const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires') });
       if (sub === 'create') console.log(`Created space ${name} (you are its owner).`);
       console.log(`Invite code: ${j.invite}  (space ${j.space}, ${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
-      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${j.invite}${c.url !== DEFAULT_URL ? ' at ' + c.url : ''}."`);
+      let pub = c.url; try { const h = await (await fetch(c.url + '/health')).json(); if (h && h.publicUrl) pub = String(h.publicUrl).replace(/\/+$/, ''); } catch {}
+      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${j.invite}${pub !== DEFAULT_URL ? ' at ' + pub : ''}."`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {
