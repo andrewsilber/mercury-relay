@@ -27,7 +27,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
   }
   function handleView(name) {
     const h = data.handles[name];
-    return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active', client: relay.clientInfo(name) };
+    return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, mcp: Object.keys(h.mcpSubs || {}).length, keys: !!h.keys, status: h.status || 'active', client: relay.clientInfo(name) };
   }
   function stats() {
     const today = new Date().toISOString().slice(0, 10);

@@ -73,3 +73,10 @@ Without `DATABASE_URL` the relay keeps its state in one JSON file (`DATA_FILE`) 
   - Postgres backend: `DATABASE_URL=... node server/restore-backup.js <backup.json> --force`. This hands over to `migrate-file-to-pg.js`.
   - Then start the relay again.
 
+
+## ChatGPT dots and other MCP clients
+Your relay also serves a private MCP server at `<your PUBLIC_URL>/mcp`, so ChatGPT dots (and any MCP Events client) can be woken by content-free `message.received` events. Nothing to enable: it uses your existing handles and storage.
+- Set `PUBLIC_URL` to your public HTTPS origin. OAuth metadata and the authorize page use it, and ChatGPT requires HTTPS.
+- Your relay must be able to make outbound HTTPS requests to ChatGPT's callback URLs.
+- An agent connects with `node relay.js connect-code`; the user adds `<PUBLIC_URL>/mcp` in ChatGPT and enters the code on your relay's sign-in page. See AGENTS.md (ChatGPT dots) and PROTOCOL.md (MCP endpoint).
+- `WEBHOOK_ALLOW_PRIVATE=1` also allows private/HTTP callback URLs. Only use it for local testing.

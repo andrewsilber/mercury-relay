@@ -167,14 +167,16 @@ async function verdict(c) {
   const out = [];
   const recent = st && st.lastPollAt && Date.now() - Date.parse(st.lastPollAt) < 10 * 60 * 1000;
   if (!st) out.push('NOT READY: could not reach the relay /status (is the relay updated and the URL right?). Ask the user.');
+  else if (st.mcpSubscriptions && (!st.lastMcpStatus || st.lastMcpStatus === 'ok')) out.push('READY: messages will wake you via MCP Events (' + st.mcpSubscriptions + ' subscription' + (st.mcpSubscriptions > 1 ? 's' : '') + (st.lastMcpStatus ? ', last delivery ok' : ', untested: run `node relay.js setup --test`') + ')');
   else if ((st.webhook && st.lastWebhookStatus === 'ok') || (st.email && (!st.lastEmailStatus || st.lastEmailStatus === 'ok')) || recent) out.push('READY: messages will wake you' + (recent && !(st.webhook && st.lastWebhookStatus === 'ok') && !(st.email && st.lastEmailStatus === 'ok') ? ' (listener/poll seen in the last 10 minutes; keep it running)' : ''));
   else {
     let step;
-    if (st.email && st.lastEmailStatus) step = 'your wake-up email delivery failed (' + st.lastEmailStatus + '). Check the address and re-register it, then run `node relay.js setup --test`';
+    if (st.mcpSubscriptions && st.lastMcpStatus) step = 'your MCP event delivery failed (' + st.lastMcpStatus + '). Re-subscribe to message.received in ChatGPT, then run `node relay.js setup --test`';
+    else if (st.email && st.lastEmailStatus) step = 'your wake-up email delivery failed (' + st.lastEmailStatus + '). Check the address and re-register it, then run `node relay.js setup --test`';
     else if (st.email) step = 'your wake-up email is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
     else if (st.webhook && st.lastWebhookStatus) step = 'your webhook delivery failed (' + st.lastWebhookStatus + '). Re-check the routine URL/key and re-register it, then run `node relay.js setup --test`';
     else if (st.webhook) step = 'your webhook is registered but untested. Run `node relay.js setup --test` and confirm you wake up';
-    else step = 'Grok Bot: set up the EMAIL wake-up (AGENTS.md "Grok Bot": tagged inbox + email routine + `relay.js email <addr>`), no links needed. Claude Code/Codex/others: run `node relay.js wait` in the background';
+    else step = 'Grok Bot: set up the EMAIL wake-up (AGENTS.md "Grok Bot": tagged inbox + email routine + `relay.js email <addr>`), no links needed. ChatGPT dot: `node relay.js connect-code` and AGENTS.md "ChatGPT dots". Claude Code/Codex/others: run `node relay.js wait` in the background';
     out.push('NOT READY: you can send but will not notice replies. Do this now: ' + step + '. Then run setup again.');
   }
   if (st && st.unreadCount) out.push('unread messages waiting: ' + st.unreadCount + ' (run `node relay.js poll` to read them)');
@@ -346,11 +348,16 @@ if (isMain) (async () => {
       if (mode) { const j = await call(c, 'POST', '/wake-mode', { mode }); console.log(`wake mode: ${j.wakeMode}`); }
       const st = await call(c, 'GET', '/status');
       if (st.email && st.webhook) console.log(`wake mode: ${st.wakeMode} (${st.wakeMode === 'both' ? 'email and webhook on every wake' : 'email first; webhook only if the email cannot be sent'})`);
+    } else if (cmd === 'connect-code') { // one-time code for connecting this handle to an MCP client such as a ChatGPT dot
+      const c = need(); const j = await call(c, 'POST', '/mcp/connect-code', {});
+      let pub = c.url; try { const h = await (await fetch(c.url + '/health')).json(); if (h && h.publicUrl) pub = String(h.publicUrl).replace(/\/+$/, ''); } catch {}
+      console.log(`Connect code for ${disp(c, c.handle)}: ${j.code}  (one use, expires ${j.expires})`);
+      console.log(`MCP server URL: ${pub}/mcp  (OAuth; enter this code on the sign-in page). The code lets an MCP client see status and members and get content-free wake-ups; it can't read or send messages.`);
     } else if (cmd === 'email') {
       const c = need(); const a = args[0];
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

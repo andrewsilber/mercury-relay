@@ -38,6 +38,22 @@ const MIN_DEFAULT = LATEST; // default: clients must be at least this server's o
 const MIN_CLIENT = /^\d+\.\d+\.\d+$/.test(process.env.CLIENT_MIN_VERSION || '') ? process.env.CLIENT_MIN_VERSION : MIN_DEFAULT;
 const vcmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
 const clientTooOld = v => !/^\d+\.\d+\.\d+/.test(v || '') || vcmp(String(v).match(/^\d+\.\d+\.\d+/)[0], MIN_CLIENT) < 0;
+const oauth = require('./oauth.js')({ relay, json, allowPrivate: process.env.WEBHOOK_ALLOW_PRIVATE === '1' });
+// MCP endpoint (Streamable HTTP, JSON responses only, stateless). Auth: OAuth access token (ChatGPT) or the handle's relay token.
+function mcpHttp(req, res) {
+  if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST', 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: 'use POST (JSON-RPC); this server does not offer an SSE stream' })); }
+  const tok = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];
+  const me = oauth.tokenAuth(tok) || relay.auth(tok);
+  if (!me) { res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': `Bearer resource_metadata="${publicUrl(req)}/.well-known/oauth-protected-resource"` }); return res.end(JSON.stringify({ error: 'invalid or missing token' })); }
+  if (relay.data.handles[me].status === 'blocked') return json(res, 403, { error: 'handle blocked by admin' });
+  body(req, async m => {
+    try {
+      const out = Array.isArray(m) ? (await Promise.all(m.map(x => relay.mcp.rpc(me, x)))).filter(Boolean) : await relay.mcp.rpc(me, m);
+      if (!out || (Array.isArray(out) && !out.length)) { res.writeHead(202); return res.end(); }
+      json(res, 200, out);
+    } catch (e) { console.error('mcp error: ' + e.message); json(res, 500, { jsonrpc: '2.0', id: null, error: { code: -32603, message: 'internal error' } }); }
+  }, res);
+}
 const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush, store, backup });
 
 // Authenticated routes: [method, path] -> (me, msg) => result. POST handlers get the JSON body.
@@ -52,6 +68,7 @@ const AUTHED = {
   'GET /email': me => relay.getEmail(me),
   'POST /email': (me, m) => relay.setEmail(me, m),
   'POST /wake-mode': (me, m) => relay.setWakeMode(me, m),
+  'POST /mcp/connect-code': me => ({ code: 200, body: oauth.connectCode(me) }),
 };
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -65,6 +82,8 @@ http.createServer((req, res) => {
     return fs.readFile(f, (e, b) => { if (e) { res.writeHead(404); return res.end('not found'); } res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store' }); res.end(b); });
   }
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, clientRepo: require('./client-repo'), version: LATEST, latest: LATEST, minClient: MIN_CLIENT, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, knownClientVersions: [LATEST, ...limits.knownClientVersions.filter(v => v !== LATEST)], emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (u.pathname === '/mcp') return mcpHttp(req, res); // MCP clients (ChatGPT) don't send X-Relay-Client
+  if ((u.pathname.startsWith('/.well-known/') || u.pathname.startsWith('/oauth/')) && oauth.handle(req, res, u)) return;
   if (!(req.method === 'GET' && /^\/invites\//.test(u.pathname)) && clientTooOld(req.headers['x-relay-client'])) return json(res, 426, { error: 'update required', min: MIN_CLIENT, latest: LATEST, how: 'git pull in your relay checkout' });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const ivm = /^\/invites\/([^/]{1,64})$/.exec(u.pathname);

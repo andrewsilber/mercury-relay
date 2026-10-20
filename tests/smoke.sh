@@ -319,6 +319,15 @@ if [ "$BACKEND" = json-file ]; then
   A "$URL/admin/api/storage" | grep -q '"last":{"at":' || fail "last backup not reported"
 else A "$URL/admin/api/storage" | grep -q '"backup":{"enabled":false' || fail "pg backup status"; fi
 A "$URL/admin/api/storage" | grep -q '"max":1000' || fail "message log cap not reported"
+# MCP endpoint + MCP Events (ChatGPT dots): simulator acts as ChatGPT; the relay restarts between subscribe and delivery
+MP=$((PORT + 7)); MCPU="http://127.0.0.1:$MP"
+start_mcp() { (cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 PORT=$MP env $(ST mcp) node "$ROOT/server.js" >>"$TMP/mcp.log" 2>&1) & SRVM=$!; for i in $(seq 50); do curl -sf "$MCPU/health" >/dev/null && break; sleep 0.1; done; }
+start_mcp
+node "$ROOT/tests/mcp-sim.js" phase1 "$MCPU" "$TMP/mcp-state.json" || { cat "$TMP/mcp.log"; exit 1; }
+kill $SRVM; wait $SRVM 2>/dev/null || true; start_mcp
+node "$ROOT/tests/mcp-sim.js" phase2 "$MCPU" "$TMP/mcp-state.json" || { cat "$TMP/mcp.log"; exit 1; }
+[ "$(command curl -s -o /dev/null -w '%{http_code}' "$MCPU/mcp")" = 405 ] || { echo "FAIL: GET /mcp should be 405"; exit 1; }
+kill $SRVM 2>/dev/null || true
 grep -q "dana@acme" "$TMP/cli-output.log" || { echo "FAIL: output log not captured"; exit 1; }
 grep -E '@[a-z0-9_-]+@' "$TMP/cli-output.log" && { echo "FAIL: CLI printed a double-@ address (above)"; exit 1; }
 echo "PASS: no double-@ addresses in CLI output"

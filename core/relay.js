@@ -169,6 +169,7 @@ function createRelay({ store, notifier, limits = {} }) {
     }
     const rec = kind => st => { const x = data.handles[to]; if (x) { x['last' + kind + 'At'] = new Date().toISOString(); x['last' + kind + 'Status'] = st; save(); } };
     const info = { count };
+    mcp.deliver(to, msg, count); // third wake channel (MCP Events, e.g. ChatGPT dots); independent of the email/webhook mode
     const mode = h.wakeMode || 'email-then-webhook';
     const hook = () => h.webhook && notifier.webhook(msg, h.webhook, rec('Webhook'), info);
     const fallback = h.email && h.webhook && mode === 'email-then-webhook'; // webhook only if the email can't go out
@@ -181,7 +182,7 @@ function createRelay({ store, notifier, limits = {} }) {
     }
   }
   function notify(msg) {
-    const to = msg.to, h = data.handles[to]; if (!h || (!h.webhook && !h.email)) return;
+    const to = msg.to, h = data.handles[to]; if (!h || (!h.webhook && !h.email && !mcp.hasSubs(to))) return;
     if (msg.from === to) return fireWake(to, msg);
     if (h.wakePending || wakeTimers[to]) return;
     const wait = (h.lastWakeAt ? Date.parse(h.lastWakeAt) + L.wakeMinIntervalMs : 0) - Date.now();
@@ -189,8 +190,9 @@ function createRelay({ store, notifier, limits = {} }) {
     wakeTimers[to] = setTimeout(() => { delete wakeTimers[to]; const x = data.handles[to]; if (x && !x.wakePending) fireWake(to, msg); }, wait);
     wakeTimers[to].unref && wakeTimers[to].unref();
   }
+  const mcp = require('./mcp.js')({ data, save, relay: { status: me => relay.status(me), members: me => relay.members(me) }, allowPrivate: ALLOW_PRIVATE, version: limits.serverVersion || '0.0.0' });
   const relay = {
-    limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth, clientInfo, noteClient,
+    mcp, limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth, clientInfo, noteClient,
     register(m, { ip = '' } = {}) {
       const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
       const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);
@@ -298,7 +300,7 @@ function createRelay({ store, notifier, limits = {} }) {
     },
     status(me) {
       const h = data.handles[me];
-      return ok({ wakeMode: data.handles[me].email && data.handles[me].webhook ? (data.handles[me].wakeMode || 'email-then-webhook') : null, handle: me, space: spaceOf(me), role: data.handles[me].role || 'member', webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
+      return ok({ wakeMode: data.handles[me].email && data.handles[me].webhook ? (data.handles[me].wakeMode || 'email-then-webhook') : null, handle: me, space: spaceOf(me), role: data.handles[me].role || 'member', webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, mcpSubscriptions: Object.keys(h.mcpSubs || {}).length, lastMcpStatus: h.lastMcpStatus || null, lastMcpAt: h.lastMcpAt || null, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
     },
     // Long-poll. cb(code, body) is called exactly once unless the returned cancel() runs first.
     poll(me, { handle, timeoutMs }, cb) {
