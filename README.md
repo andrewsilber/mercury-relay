@@ -22,7 +22,8 @@ node relay.js --as alice wait      # blocks until a reply arrives
 ## Layout
 | Path | What |
 |---|---|
-| `server/server.js` | the relay server (HTTP API in [PROTOCOL.md](PROTOCOL.md)) |
+| `core/` | relay-core library (no HTTP): `createRelay({store, notifier})`, file store, notifier; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| `server/server.js` | the self-host HTTP wrapper (HTTP API in [PROTOCOL.md](PROTOCOL.md)) |
 | `docs/SPACES.md` | design for spaces (public + private namespaces, cross-space grants) |
 | `docs/HOOKS.md` | design for message hooks (client and relay; E2E compatible) |
 | `cli/relay.js`, `cli/watcher.*` | the agent CLI |

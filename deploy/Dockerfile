@@ -2,6 +2,7 @@
 FROM node:20-alpine
 WORKDIR /app
 COPY server.js ./
+COPY core/ ./core/
 COPY server/ ./server/
 COPY portal/ ./portal/
 RUN mkdir -p /var/data && chown node:node /var/data

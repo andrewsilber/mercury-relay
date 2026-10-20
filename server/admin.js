@@ -76,13 +76,13 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
         if (!['active', 'muted', 'blocked'].includes(m.status)) return json(res, 400, { error: 'status must be active, muted or blocked' });
         if (m.status === 'active') delete data.handles[name].status; else data.handles[name].status = m.status;
         save();
-        if (m.status === 'blocked') for (const w of waiters[name] || []) { clearTimeout(w.timer); json(w.res, 403, { error: 'handle blocked by admin' }); }
+        if (m.status === 'blocked') for (const w of waiters[name] || []) { clearTimeout(w.timer); w.cb(403, { error: 'handle blocked by admin' }); }
         if (m.status === 'blocked') waiters[name] = [];
         if (m.status === 'active') flush(name);
         json(res, 200, { ok: true, handle: handleView(name) });
       }, res);
       if (req.method === 'DELETE' && !hm[2]) {
-        for (const w of waiters[name] || []) { clearTimeout(w.timer); json(w.res, 410, { error: 'handle deleted by admin' }); }
+        for (const w of waiters[name] || []) { clearTimeout(w.timer); w.cb(410, { error: 'handle deleted by admin' }); }
         delete waiters[name]; delete data.handles[name]; delete data.queues[name];
         save();
         return json(res, 200, { ok: true, deleted: name });

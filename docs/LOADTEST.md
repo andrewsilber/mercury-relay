@@ -38,6 +38,9 @@ These are rough figures; Render CPUs are shared and slower than this box.
 - **Render Standard (1 CPU / 2 GB):** about **2,000+ msgs/s**, tens of thousands of handles, and several thousand long-pollers. Memory leaves plenty of room.
 - Durability: a crash (not a deploy) can lose up to 200 ms of writes, including a just-issued registration. Deploys and restarts flush.
 
+## After core refactor (createRelay + file store)
+A `--quick` rerun after moving the logic into `core/` gave the same results: 1k handles, 2,156 registrations/s; 1,125 / 2,268 / 2,267 msgs/s at concurrency 1 / 10 / 50; send p95 0.4 / 2.8 / 12.7 ms; 0 errors; relay CPU about 35%. The behavior didn't change.
+
 ## Before optimization (commit b20a73f)
 
 ### Registration (register + key upload, 50 concurrent)
