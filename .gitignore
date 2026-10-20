@@ -1,5 +1,8 @@
 data.json
 data.json.tmp
+*.json.tmp
 *.log
 chat-log.txt
 .resend-key
+.env
+node_modules/
