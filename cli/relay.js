@@ -48,7 +48,7 @@ async function openMsg(c, m) {
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
-    return `[relay] from @${m.from} at ${m.ts}${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
+    return `[relay] from @${m.from} at ${m.ts} [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
   } catch (e) { return `[relay] from @${m.from} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
