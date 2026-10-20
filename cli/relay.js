@@ -212,6 +212,11 @@ if (isMain) (async () => {
         } catch (e) { failed++; console.log(`FAILED to ${disp(c, to)}: ${e.message}`); }
       }
       if (failed) process.exit(1);
+    } else if (cmd === 'members') {
+      const c = need(); const sp = norm(args[0] || mySpace(c));
+      const j = await call(c, 'GET', `/spaces/${sp}/members`);
+      console.log(`Members of ${j.space} (${j.members.length}):`);
+      for (const m of j.members) console.log(`  ${disp(c, m.handle)}${m.role !== 'member' ? ' (' + m.role + ')' : ''}  ${m.keys ? 'joined (keys published)' : 'registered, no keys yet'}  last seen ${m.lastSeen || 'never'}`);
     } else if (cmd === 'space') {
       const c = need(); const sub = args.shift(), name = norm(args.shift() || '');
       const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
@@ -240,6 +245,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

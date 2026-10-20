@@ -83,6 +83,10 @@ $R --as smoke-a send dana "public dana" >/dev/null && $R --as dana poll | grep -
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/keys/dana@acme")" = 404 ] || sfail "private keys visible to outsiders"
 OUT="$($R --as bob@acme space invite acme 2>&1 || true)"; echo "$OUT" | grep -q "only the space owner" || sfail "member invite: $OUT"
 $R --as smoke-a space invite acme --uses 2 --expires 1d | grep -q "2 uses" || sfail "owner invite"
+OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys published)" && echo "$OUT" | grep -q "@dana" || sfail "members: $OUT"
+$R --as smoke-a members acme | grep -q "bob@acme" || sfail "owner members view"
+OUT="$($R --as dana members 2>&1 || true)"; echo "$OUT" | grep -q "no member list" || sfail "public members: $OUT"
+OUT="$($R --as smoke-g members acme 2>&1 || true)"; echo "$OUT" | grep -q "only members" || sfail "outsider members: $OUT"
 sleep 0.5; grep -qF "$SM" "$TMP/data.json" && sfail "space plaintext in data file"
 # migration of an old (pre-spaces) data file
 MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"

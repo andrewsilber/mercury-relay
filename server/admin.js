@@ -52,7 +52,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
     if (req.method === 'POST' && req.headers['x-admin'] !== '1') return json(res, 403, { error: 'missing X-Admin header' }); // CSRF belt-and-braces
     if (req.method === 'POST' && p === '/admin/api/logout') { sessions.delete(tok); res.setHeader('set-cookie', cookie('', 0)); return json(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/admin/api/state') {
-      return json(res, 200, { stats: stats(), settings: data.settings, handles: Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length })) });
+      return json(res, 200, { stats: stats(), settings: data.settings, handles: Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length, memberList: name === 'public' ? [] : Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, keys: !!h.keys, lastSeen: h.lastSeen || null })) })) });
     }
     if (req.method === 'GET' && p === '/admin/api/messages') {
       const withText = u.searchParams.get('text') === '1';

@@ -188,6 +188,13 @@ function createRelay({ store, notifier }) {
       delete data.spaces[name]; save();
       return ok({ ok: true, deleted: name, handlesRemoved: members.length });
     },
+    members(me, name) { // members-only directory of a private space
+      name = String(name || spaceOf(me)).toLowerCase();
+      if (name === PUBLIC) return err(403, 'the public space has no member list');
+      if (!data.spaces[name] || (spaceOf(me) !== name && data.spaces[name].owner !== me)) return err(403, 'only members of a space can list its members');
+      const list = Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, role: h.role || 'member', keys: !!h.keys, lastSeen: h.lastSeen || null }));
+      return ok({ space: name, members: list.sort((a, b) => a.handle.localeCompare(b.handle)) });
+    },
     listInvites() { // admin only: live invites
       pruneInvites(); const out = [];
       for (const [space, sp] of Object.entries(data.spaces)) for (const [id, inv] of Object.entries(sp.invites || {})) out.push({ id: id.slice(0, 16), space, code: inv.code || null, usesLeft: inv.maxUses - inv.uses, maxUses: inv.maxUses, expires: inv.expires, created: inv.created || null, role: inv.role, by: inv.by || null });

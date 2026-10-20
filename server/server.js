@@ -52,6 +52,8 @@ http.createServer((req, res) => {
     req.on('close', cancel);
     return;
   }
+  const mm = /^\/spaces\/([a-z0-9_-]{3,32})\/members$/.exec(u.pathname);
+  if (req.method === 'GET' && mm) { if (!me) return json(res, 401, { error: 'invalid or missing token' }); return reply(res, relay.members(me, mm[1])); }
   const dm = /^\/spaces\/([a-z0-9_-]{3,32})$/.exec(u.pathname);
   if (req.method === 'DELETE' && dm) { if (!me) return json(res, 401, { error: 'invalid or missing token' }); return reply(res, relay.deleteSpace(dm[1], me)); }
   const im = /^\/spaces\/([a-z0-9_-]{3,32})\/invites$/.exec(u.pathname);
