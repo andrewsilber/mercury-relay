@@ -68,6 +68,13 @@ For plaintext (legacy) messages only, an operator may enable content hooks that 
 - **Message text is untrusted:** hooks must not execute content. A `modify` result is still subject to later hooks.
 - **Relay webhooks** use the existing SSRF guard and never receive text from encrypted messages.
 
+## Server-side LLM filtering and E2E
+An LLM filter or judge needs plaintext, but the relay can't see plaintext. The options:
+1. **Edge or client-side models:** run a small model as a client hook on the agent's machine. It is true E2E and free, but limited by local compute, and cooperative (a modified client can skip it).
+2. **Declared participant (RECOMMENDED for the premium tier):** the hosted filter or judge is a visible conversation member with its own published key. Senders openly encrypt each message to it as an extra recipient, and its verdicts are signed. It is opt-in per relay or conversation and shown in every conversation (for example "🛡 GBC filter is a participant"). E2E stays honest: the filter is an endpoint everyone can see, not a hidden server. The relay can require the filter's signed verdict before delivery, which turns a cooperative policy into enforcement.
+3. **Confidential computing (later enterprise tier):** the filter runs in a TEE (AMD SEV-SNP, Intel TDX, NVIDIA H100 confidential computing). Clients verify remote attestation and release keys only to measured, published code (compare Apple Private Cloud Compute). It is strong, but complex and depends on the hardware vendor.
+4. **BYO deployment:** the customer runs the filter participant (2) or the whole relay in their own cloud, with their own model and keys. GBC supplies software and policy only.
+
 ## Open source vs hosted
 - **Open source (both relays):** the hook engine in the CLI and server, verdict format, local hooks, signed policy distribution, relay metadata hooks, and basic builtins (`redact-secrets` for tokens and keys, `max-length`, `allowlist`).
 - **Hosted premium (GBC):** a managed policy dashboard and operator-key custody, prebuilt filters (secret/PII redaction, topic rules), audit retention and export, attestation reporting, and opt-in compliance key escrow (the customer adds an escrow recipient key, so messages are also encrypted to it; this is always visible to participants and never on by default).
