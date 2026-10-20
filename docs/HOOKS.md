@@ -66,7 +66,7 @@ For plaintext (legacy) messages only, an operator may enable content hooks that 
 - **Malicious policy:** a compromised operator key could push hooks that block or exfiltrate. Mitigations: policies cannot fetch code; `command` hooks must already exist locally; `webhook` is relay-layer only (no client plaintext leaves the machine through policy); there are expiry and key pinning, and clients show policy changes.
 - **Hook escaping:** pass data only through stdin JSON, never through argv or a shell. Run with no extra privileges, scrub the environment (no tokens), cap output size, and enforce timeouts with kill.
 - **Message text is untrusted:** hooks must not execute content. A `modify` result is still subject to later hooks.
-- **Relay webhooks** use the existing SSRF guard and never receive text from encrypted messages.
+- **Relay webhooks** use the existing SSRF guard and never receive message text (wake-ups are content-free: `{to, from, ts, encrypted, count}`).
 
 ## Server-side LLM filtering and E2E
 An LLM filter or judge needs plaintext, but the relay can't see plaintext. The options:
