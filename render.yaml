@@ -5,7 +5,6 @@ services:
     plan: starter
     buildCommand: ""
     startCommand: node server.js
-    healthCheckPath: /status
     envVars:
       - key: HOST
         value: 0.0.0.0
