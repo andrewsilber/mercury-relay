@@ -14,9 +14,10 @@ const publicPart = k => ({ x25519: k.x25519.pub, ed25519: k.ed25519.pub });
 const fingerprint = p => crypto.createHash('sha256').update(p.x25519 + '|' + p.ed25519).digest('hex').slice(0, 32).match(/.{4}/g).join(' ');
 const kdf = (shared, epk, rpk) => Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.from(epk + '|' + rpk), 'agentrelay-e2e-v1', 32));
 const sigInput = (from, to, e) => Buffer.from(['agentrelay-v' + (e.v === 2 ? 2 : 1), from, to, e.epk, e.nonce, e.ct].join('|'));
-// cc (array of handles) makes a v2 envelope: the encrypted payload is JSON {text, cc}, so the group list is confidential and signed.
-function encrypt(text, from, to, recipPub, senderKeys, cc) {
-  const v = cc && cc.length ? 2 : 1; if (v === 2) text = JSON.stringify({ text, cc });
+// cc (array of handles) or re (id of the message this replies to) makes a v2 envelope: the encrypted payload is JSON {text, cc, re},
+// so the group list and reply reference are confidential and covered by the signature (the ciphertext is signed).
+function encrypt(text, from, to, recipPub, senderKeys, cc, { re } = {}) {
+  const v = (cc && cc.length) || re ? 2 : 1; if (v === 2) text = JSON.stringify({ text, cc: cc || [], ...(re ? { re: String(re) } : {}) });
   const eph = crypto.generateKeyPairSync('x25519'), epk = pubDer(eph.publicKey);
   const key = kdf(crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: pubKey(recipPub.x25519) }), epk, recipPub.x25519);
   const nonce = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', key, nonce);
@@ -33,7 +34,7 @@ function decrypt(e, from, to, myKeys, senderPub) {
   const raw = Buffer.from(e.ct, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(e.nonce, 'base64'));
   d.setAAD(Buffer.from(from + '|' + to)); d.setAuthTag(raw.subarray(raw.length - 16));
   const pt = Buffer.concat([d.update(raw.subarray(0, raw.length - 16)), d.final()]).toString('utf8');
-  if (e.v === 2) { const j = JSON.parse(pt); return { text: String(j.text), cc: Array.isArray(j.cc) ? j.cc.map(String) : [], verified }; }
-  return { text: pt, cc: [], verified };
+  if (e.v === 2) { const j = JSON.parse(pt); return { text: String(j.text), cc: Array.isArray(j.cc) ? j.cc.map(String) : [], re: j.re ? String(j.re) : null, verified }; }
+  return { text: pt, cc: [], re: null, verified };
 }
 module.exports = { genKeys, publicPart, fingerprint, encrypt, decrypt };

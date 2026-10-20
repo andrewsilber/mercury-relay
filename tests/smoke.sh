@@ -16,6 +16,7 @@ for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; do
 # Wrapper logs all CLI output so we can check address formatting at the end.
 printf '#!/usr/bin/env bash\nnode "%s/relay.js" "$@" 2>&1 | tee -a "%s/cli-output.log"; exit ${PIPESTATUS[0]}\n' "$ROOT" "$TMP" > "$TMP/r.sh"; chmod +x "$TMP/r.sh"
 R="$TMP/r.sh"
+export AGENTRELAY_NEWER_CHECK=0 # most tests send without reading first; the newer-message check is tested explicitly below
 $R init smoke-a --url "$URL" >/dev/null
 $R init smoke-b --url "$URL" >/dev/null
 MSG="hello from a $RANDOM"
@@ -56,7 +57,21 @@ $R --as smoke-b poll >/dev/null
 $R --as smoke-g reply-all "ack all" | grep -c "sent to" | grep -q 2 || efail "reply-all"
 $R --as smoke-a poll | grep -q "from @smoke-g to you + @smoke-b .*ack all" || efail "reply-all at a"
 $R --as smoke-b poll | grep -q "ack all" || efail "reply-all at b"
-echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged"
+# reply-all records the replied-to id inside the signed envelope; newer-message check blocks stale sends
+GID="$($R --as smoke-g poll 2>&1; true)"
+$R --as smoke-a send smoke-b,smoke-g "round two" >/dev/null
+GP="$($R --as smoke-g poll)"; RID="$(echo "$GP" | sed -nE 's/.*\(id ([0-9a-f-]+)\).*round two.*/\1/p')"; [ -n "$RID" ] || efail "poll output lacks id: $GP"
+$R --as smoke-b send smoke-g "crossed message" >/dev/null
+set +e; NO="$(AGENTRELAY_NEWER_CHECK=1 $R --as smoke-g reply-all "stale reply")"; NRC=$?; set -e
+[ "$NRC" = 3 ] && echo "$NO" | grep -q "NEWER MESSAGES ARRIVED" && echo "$NO" | grep -q "crossed message" || efail "newer-message check: rc=$NRC $NO"
+$R --as smoke-a poll | grep -q "stale reply" && efail "stale reply was sent"
+AGENTRELAY_NEWER_CHECK=1 $R --as smoke-g reply-all "fresh reply" >/dev/null || efail "reply-all after re-read"
+$R --as smoke-a poll | grep -q "re $RID) \[end-to-end encrypted\]: fresh reply" || efail "re id not shown to recipient"
+$R --as smoke-b poll >/dev/null
+$R --as smoke-a send smoke-g "unread for g" >/dev/null
+AGENTRELAY_NEWER_CHECK=1 $R --as smoke-g send --force smoke-a "forced" | grep -q "sent to" || efail "--force"
+$R --as smoke-a send --re abc-123 smoke-g "explicit re" >/dev/null; $R --as smoke-g poll | grep -q "re abc-123).*explicit re" || efail "--re"
+echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged, group reply-all with signed re, newer-message check, --force, --re"
 # --- spaces ---
 sfail() { echo "FAIL: $*"; exit 1; }
 SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; [ -n "$CODE" ] || sfail "space create: $SC1"
