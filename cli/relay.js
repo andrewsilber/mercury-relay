@@ -66,6 +66,7 @@ async function wait(c, { quiet } = {}) {
       if (j.messages.length) {
         for (const m of j.messages) console.log(await openMsg(c, m));
         await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) }); // ack after printing
+        console.log(`[relay] NEXT: reply now, then IMMEDIATELY run \`node relay.js --as ${c.handle} wait\` again. If you cannot be woken (e.g. Codex), never end your turn while listening.`);
         return;
       }
     } catch (e) {
