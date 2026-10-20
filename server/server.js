@@ -37,6 +37,7 @@ const AUTHED = {
   'POST /webhook': (me, m) => relay.setWebhook(me, m),
   'GET /email': me => relay.getEmail(me),
   'POST /email': (me, m) => relay.setEmail(me, m),
+  'POST /wake-mode': (me, m) => relay.setWakeMode(me, m),
 };
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');

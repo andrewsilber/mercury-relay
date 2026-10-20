@@ -153,11 +153,15 @@ function createRelay({ store, notifier, limits = {} }) {
     h.wakePending = true; h.lastWakeAt = new Date().toISOString(); save();
     const rec = kind => st => { const x = data.handles[to]; if (x) { x['last' + kind + 'At'] = new Date().toISOString(); x['last' + kind + 'Status'] = st; save(); } };
     const info = { count };
-    if (h.webhook) notifier.webhook(msg, h.webhook, rec('Webhook'), info);
+    const mode = h.wakeMode || 'email-then-webhook';
+    const hook = () => h.webhook && notifier.webhook(msg, h.webhook, rec('Webhook'), info);
+    const fallback = h.email && h.webhook && mode === 'email-then-webhook'; // webhook only if the email can't go out
+    if (h.webhook && !fallback) hook();
     if (h.email) {
+      const recEmail = st => { rec('Email')(st); if (fallback && st !== 'ok') { console.log(`email wake for ${to} failed (${st}); using webhook fallback`); hook(); } };
       const es = emailDay();
-      if (es.sent >= L.emailDailyMax) { es.skipped++; save(); console.log(`email wake for ${to} skipped: daily cap ${L.emailDailyMax} reached`); rec('Email')('skipped: relay daily email cap reached'); }
-      else { if (notifier.canEmail) { es.sent++; save(); } notifier.email(msg, h.email, rec('Email'), info); }
+      if (es.sent >= L.emailDailyMax) { es.skipped++; save(); console.log(`email wake for ${to} skipped: daily cap ${L.emailDailyMax} reached`); recEmail('skipped: relay daily email cap reached'); }
+      else { if (notifier.canEmail) { es.sent++; save(); } notifier.email(msg, h.email, recEmail, info); }
     }
   }
   function notify(msg) {
@@ -267,7 +271,7 @@ function createRelay({ store, notifier, limits = {} }) {
     },
     status(me) {
       const h = data.handles[me];
-      return ok({ handle: me, space: spaceOf(me), role: data.handles[me].role || 'member', webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
+      return ok({ wakeMode: data.handles[me].email && data.handles[me].webhook ? (data.handles[me].wakeMode || 'email-then-webhook') : null, handle: me, space: spaceOf(me), role: data.handles[me].role || 'member', webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
     },
     // Long-poll. cb(code, body) is called exactly once unless the returned cancel() runs first.
     poll(me, { handle, timeoutMs }, cb) {
@@ -301,6 +305,10 @@ function createRelay({ store, notifier, limits = {} }) {
       for (const [k, v] of Object.entries(m.headers && typeof m.headers === 'object' ? m.headers : {})) if (/^[A-Za-z0-9-]{1,64}$/.test(k) && typeof v === 'string' && v.length < 2000) headers[k] = v;
       h.webhook = { url: url.toString(), headers }; delete h.lastWebhookStatus; delete h.lastWebhookAt; save();
       return ok({ ok: true, webhook: url.origin + url.pathname });
+    },
+    setWakeMode(me, m) {
+      if (!['email-then-webhook', 'both'].includes(m.mode)) return err(400, "mode must be 'email-then-webhook' or 'both'");
+      data.handles[me].wakeMode = m.mode; save(); return ok({ ok: true, wakeMode: m.mode });
     },
     getEmail(me) { return ok({ email: data.handles[me].email || null }); },
     setEmail(me, m) {

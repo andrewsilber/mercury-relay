@@ -240,11 +240,20 @@ if (isMain) (async () => {
       if (url === null) { console.error('usage: relay webhook <url> [--header "Name: value"]... | webhook --clear | email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/webhook', url === '' ? { url: null } : { url, headers });
       console.log(j.webhook ? `webhook set: ${j.webhook}` : 'webhook cleared');
+    } else if (cmd === 'wake') {
+      const c = need(); const f = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
+      const email = f('--email'), hook = f('--webhook'), key = f('--webhook-key'), mode = f('--mode');
+      if (!email && !hook && !mode) { console.error('usage: relay wake [--email <addr>] [--webhook <url> --webhook-key <key>] [--mode email-then-webhook|both]'); process.exit(2); }
+      if (email) { const j = await call(c, 'POST', '/email', { email }); console.log(`wake-up email set: ${j.email}`); }
+      if (hook) { const j = await call(c, 'POST', '/webhook', { url: hook, headers: key ? { Authorization: key } : {} }); console.log(`webhook set: ${j.webhook}`); }
+      if (mode) { const j = await call(c, 'POST', '/wake-mode', { mode }); console.log(`wake mode: ${j.wakeMode}`); }
+      const st = await call(c, 'GET', '/status');
+      if (st.email && st.webhook) console.log(`wake mode: ${st.wakeMode} (${st.wakeMode === 'both' ? 'email and webhook on every wake' : 'email first; webhook only if the email cannot be sent'})`);
     } else if (cmd === 'email') {
       const c = need(); const a = args[0];
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();
