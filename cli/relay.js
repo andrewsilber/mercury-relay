@@ -23,7 +23,34 @@ function resolveConf() {
   if (ids.length > 1) { console.error('Several identities exist (' + ids.map(i => '@' + i).join(', ') + '). Pick yours with MERCURY_RELAY_HANDLE=<handle> or --as <handle>.'); process.exit(2); }
   return fs.existsSync(LEGACY) ? LEGACY : null;
 }
-const loadConf = () => { const p = resolveConf(); return p ? readJson(p) : null; };
+const e2e = require('./e2e.js');
+const loadConf = () => { const p = resolveConf(); const c = p ? readJson(p) : null; if (c) Object.defineProperty(c, '_path', { value: p, enumerable: false }); return c; };
+const saveConf = c => { if (c._path) fs.writeFileSync(c._path, JSON.stringify(c, null, 2), { mode: 0o600 }); };
+// Generate keys locally if missing and publish the public half. Private keys never leave the config file.
+async function ensureKeys(c) {
+  if (!c.keys) { c.keys = e2e.genKeys(); c.keysUploaded = false; saveConf(c); }
+  if (!c.keysUploaded) {
+    try { await call(c, 'POST', '/keys', e2e.publicPart(c.keys)); c.keysUploaded = true; saveConf(c); }
+    catch (e) { if (e.status !== 404) throw e; } // relay without E2E support: retry next run
+  }
+  return c;
+}
+async function peerKeys(c, h) { // fetch + pin (trust on first use)
+  let k; try { k = await call(c, 'GET', '/keys/' + encodeURIComponent(h)); } catch (e) { if (e.status === 404) return null; throw e; }
+  if (!k || !k.x25519 || !k.ed25519) return null;
+  c.peers ||= {}; const fp = e2e.fingerprint(k), old = c.peers[h];
+  if (old && old !== fp) console.error(`[relay] WARNING: @${h}'s key changed (was ${old}, now ${fp}). They may have re-initialized, or the relay may be lying. Confirm with @${h}'s user out of band.`);
+  if (old !== fp) { c.peers[h] = fp; saveConf(c); }
+  return k;
+}
+async function openMsg(c, m) {
+  if (!m.enc) return `[relay] from @${m.from} at ${m.ts} [UNENCRYPTED]: ${m.text}`;
+  try {
+    if (!c.keys) throw new Error('no local keys');
+    const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
+    return `[relay] from @${m.from} at ${m.ts}${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
+  } catch (e) { return `[relay] from @${m.from} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
+}
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
 async function call(c, method, p, bodyObj) {
   const r = await fetch(c.url + p, { method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + c.token }, body: bodyObj ? JSON.stringify(bodyObj) : undefined });
@@ -31,13 +58,13 @@ async function call(c, method, p, bodyObj) {
   if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
   return j;
 }
-const fmt = m => `[relay] from @${m.from} at ${m.ts}: ${m.text}`;
 async function wait(c, { quiet } = {}) {
+  await ensureKeys(c).catch(() => {});
   for (;;) {
     try {
       const j = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=30`);
       if (j.messages.length) {
-        for (const m of j.messages) console.log(fmt(m));
+        for (const m of j.messages) console.log(await openMsg(c, m));
         await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) }); // ack after printing
         return;
       }
@@ -49,8 +76,9 @@ async function wait(c, { quiet } = {}) {
 }
 // Non-blocking: print + ack pending messages and return immediately. Returns count.
 async function poll(c) {
+  await ensureKeys(c).catch(() => {});
   const j = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=0`);
-  for (const m of j.messages) console.log(fmt(m));
+  for (const m of j.messages) console.log(await openMsg(c, m));
   if (j.messages.length) await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) });
   else console.log('[relay] no new messages');
   return j.messages.length;
@@ -82,7 +110,7 @@ function nextSteps(c) {
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
-module.exports = { wait, poll, loadConf };
+module.exports = { wait, poll, loadConf, ensureKeys };
 const isMain = require.main === module || (require.main && require.main.filename === path.join(__dirname, '..', 'relay.js'));
 if (isMain) (async () => {
   const args = process.argv.slice(2);
@@ -106,6 +134,7 @@ if (isMain) (async () => {
       if (!r.ok) { console.error('register failed: ' + (j.error || r.status)); process.exit(1); }
       fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
       fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
+      { const c0 = readJson(file); Object.defineProperty(c0, '_path', { value: file }); await ensureKeys(c0); }
       console.log(`Connected to the relay as @${j.handle} (${url}). Config saved to ${file}`);
       console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
       console.log('');
@@ -117,7 +146,7 @@ if (isMain) (async () => {
         if (!ids.length && !fs.existsSync(LEGACY)) console.log('no local identities');
         for (const h of ids) { const c = readJson(confPath(h)) || {}; console.log(`@${h} at ${c.url}${h === cur ? '  (current)' : ''}  ${confPath(h)}`); }
         if (fs.existsSync(LEGACY)) { const c = readJson(LEGACY) || {}; console.log(`@${c.handle} at ${c.url}  (legacy file ${LEGACY}, read-only fallback)`); }
-      } else { const c = need(); console.log(`@${c.handle} at ${c.url}`); }
+      } else { const c = need(); await ensureKeys(c).catch(() => {}); console.log(`@${c.handle} at ${c.url}` + (c.keys ? `  key fingerprint ${e2e.fingerprint(e2e.publicPart(c.keys))}` + (c.keysUploaded ? '' : ' (not yet on relay)') : '')); }
     } else if (cmd === 'use') {
       const h = norm(args[0]); if (!h || !fs.existsSync(confPath(h))) { console.error('usage: relay use <handle> (a local identity; see whoami --all)'); process.exit(2); }
       fs.writeFileSync(path.join(DIR, 'current'), h); console.log(`default identity is now @${h} (affects any agent on this computer that does not set MERCURY_RELAY_HANDLE)`);
@@ -142,14 +171,17 @@ if (isMain) (async () => {
         let hook = null, mail = null; try { hook = (await call(c, 'GET', '/webhook')).webhook; } catch {} try { mail = (await call(c, 'GET', '/email')).email; } catch {}
         if (!hook && !mail) console.log('\nNo webhook registered for @' + c.handle + '. Register one: node relay.js webhook "<url>" --header "Authorization: <key>" (Grok Bot: follow the Webhook upgrade steps in AGENTS.md), then re-run setup --test.');
         else {
-          const j = await call(c, 'POST', '/send', { to: c.handle, text: 'Relay wake-up self-test at ' + new Date().toISOString() });
+          await ensureKeys(c); const st = 'Relay wake-up self-test at ' + new Date().toISOString(), pk = await peerKeys(c, c.handle);
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: c.handle, enc: e2e.encrypt(st, c.handle, c.handle, pk, c.keys) } : { to: c.handle, text: st });
           console.log('\nSent a test message to yourself (id ' + j.id + '). Expect: your agent should wake within ~10s and report a message from yourself (@' + c.handle + '). If nothing happens, check the routine is on and the URL/header are right. Run `node relay.js poll` to clear the test message afterwards.');
         }
       } else if (c) nextSteps(c);
     } else if (cmd === 'send') {
       const c = need(); const to = (args.shift() || '').replace(/^@/, ''); const text = args.join(' ');
       if (!to || !text) { console.error('usage: relay send <to> <text>'); process.exit(2); }
-      const j = await call(c, 'POST', '/send', { to, text }); console.log(`sent to @${to} (id ${j.id})`);
+      await ensureKeys(c); const pk = await peerKeys(c, to);
+      const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to, enc: e2e.encrypt(text, c.handle, to, pk, c.keys) } : { to, text });
+      console.log(`sent to @${to} (id ${j.id})${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : '@' + to + ' has no key yet') + ']'}`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {

@@ -27,7 +27,7 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:#f3f3f3;padding:4px}
 <section><h2>Controls</h2>
 <p><button id="kill" class="danger"></button></p>
 <p>Max messages per conversation pair per hour <input type="number" min="0" id="pair"> &nbsp;
-Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p></section>
+Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p><p><label><input type="checkbox" id="reqenc"> Require end-to-end encryption (reject plaintext sends)</label></p></section>
 <section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
 <section><h2>Recent messages <label style="font-weight:normal;font-size:13px"><input type="checkbox" id="showtext"> show text</label></h2>
 <table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></section>
@@ -55,13 +55,14 @@ async function load() {
     $('susp').hidden = !s.suspended;
     $('kill').textContent = s.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
+    $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
     $('handles').innerHTML = state.handles.map(h => `<tr><td>@${esc(h.handle)}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
       ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
       <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
     const withText = $('showtext').checked; $('texth').hidden = !withText;
     const m = await api('messages' + (withText ? '?text=1' : ''));
-    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>@${esc(x.from)}</td><td>@${esc(x.to)}</td><td>${x.size} B</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
+    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>@${esc(x.from)}</td><td>@${esc(x.to)}</td><td>${x.size} B${x.encrypted ? ' 🔒' : ' (plaintext)'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
   } catch (e) { if (e.message !== 'not logged in') $('err').textContent = e.message; }
 }
 const act = f => async () => { try { await f(); } catch (e) { $('err').textContent = e.message; } load(); };
@@ -70,6 +71,7 @@ $('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = ''
 $('logout').onclick = act(() => post('logout'));
 $('refresh').onclick = load;
 $('showtext').onchange = load;
+$('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
 $('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));
 $('handles').onclick = ev => { const b = ev.target;

@@ -22,6 +22,26 @@ echo "$OUT2" | grep -q "no new messages" || { echo "FAIL: message not acked: $OU
 OUT3="$(timeout 20 $R --as smoke-a wait)"
 echo "$OUT3" | grep -qF "pong" || { echo "FAIL: wait got: $OUT3"; exit 1; }
 echo "PASS: register, send, poll, ack, wait"
+# --- end-to-end encryption ---
+efail() { echo "FAIL: $*"; exit 1; }
+SECRET="e2e secret $RANDOM$RANDOM"
+SO="$($R --as smoke-a send smoke-b "$SECRET")"; echo "$SO" | grep -q "end-to-end encrypted" || efail "send not encrypted: $SO"
+grep -qF "$SECRET" "$TMP/data.json" && efail "plaintext found in relay data file"
+grep -q '"priv"' "$TMP/data.json" && efail "private key on relay"
+curl -sf "$URL/keys/smoke-a" | grep -q '"ed25519"' || efail "GET /keys"
+OUT="$($R --as smoke-b poll)"; echo "$OUT" | grep -qF "$SECRET" || efail "decrypt: $OUT"
+echo "$OUT" | grep -qE "NOT VERIFIED|UNENCRYPTED|COULD NOT" && efail "verify: $OUT"
+# legacy handle without keys: plaintext still delivered, flagged
+TOK="$(curl -s -X POST -d '{"handle":"smoke-old"}' "$URL/register" | sed -E 's/.*"token":"([a-f0-9]+)".*/\1/')"
+curl -s -H "authorization: Bearer $TOK" -d '{"to":"smoke-a","text":"legacy hi"}' "$URL/send" | grep -q '"ok":true' || efail "legacy plaintext send"
+$R --as smoke-a poll | grep -q "UNENCRYPTED.*legacy hi" || efail "plaintext not flagged"
+# tampered signature -> not verified (forged sender)
+cp "$HOME/.mercury-relay/smoke-a.json" "$TMP/a.bak"
+node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f));c.keys.ed25519=require("'"$ROOT"'/cli/e2e.js").genKeys().ed25519;require("fs").writeFileSync(f,JSON.stringify(c))' "$HOME/.mercury-relay/smoke-a.json"
+$R --as smoke-a send smoke-b "forged" >/dev/null
+$R --as smoke-b poll | grep -q "SENDER NOT VERIFIED" || efail "forged signature accepted"
+cp "$TMP/a.bak" "$HOME/.mercury-relay/smoke-a.json"
+echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged"
 # --- admin ---
 fail() { echo "FAIL: $*"; exit 1; }
 curl -s "$URL/admin" | grep -q "Relay admin" || fail "admin page not served"
@@ -34,6 +54,12 @@ A() { curl -s -H "Cookie: $CK" -H 'x-admin: 1' -H 'content-type: application/jso
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-a"' || fail "state lacks handles"
 A "$URL/admin/api/messages" | grep -q '"from":"smoke-a"' || fail "message log empty"
 A "$URL/admin/api/messages" | grep -qF "$MSG" && fail "message text shown without toggle"
+A "$URL/admin/api/messages?text=1" | grep -qF "$SECRET" && fail "admin log shows e2e plaintext"
+A -X POST -d '{"requireEncryption":true}' "$URL/admin/api/settings" >/dev/null
+curl -s -H "authorization: Bearer $TOK" -d '{"to":"smoke-a","text":"plain"}' "$URL/send" | grep -q "requires end-to-end" || fail "requireEncryption not enforced"
+$R --as smoke-a send smoke-b "enc ok" >/dev/null || fail "encrypted send under requireEncryption"
+$R --as smoke-b poll | grep -q "enc ok" || fail "poll under requireEncryption"
+A -X POST -d '{"requireEncryption":false}' "$URL/admin/api/settings" >/dev/null
 A -X POST -d '{"suspended":true}' "$URL/admin/api/settings" | grep -q '"suspended":true' || fail "suspend"
 OUT="$($R --as smoke-a send smoke-b "while suspended" 2>&1 || true)"
 echo "$OUT" | grep -q "relay suspended by admin" || fail "send while suspended: $OUT"

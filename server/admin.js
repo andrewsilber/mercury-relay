@@ -20,7 +20,7 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
   function cookie(tok, maxAge) { return 'admin_session=' + tok + '; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=' + maxAge; }
   function handleView(name) {
     const h = data.handles[name];
-    return { handle: name, created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, status: h.status || 'active' };
+    return { handle: name, created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active' };
   }
   function stats() {
     const today = new Date().toISOString().slice(0, 10);
@@ -56,12 +56,13 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
     }
     if (req.method === 'GET' && p === '/admin/api/messages') {
       const withText = u.searchParams.get('text') === '1';
-      return json(res, 200, { messages: msgLog.slice().reverse().map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size }) });
+      return json(res, 200, { messages: msgLog.slice().reverse().map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size, encrypted: m.encrypted }) });
     }
     if (req.method === 'POST' && p === '/admin/api/settings') {
       return body(req, m => {
         const s = data.settings;
         if ('suspended' in m) s.suspended = !!m.suspended;
+        if ('requireEncryption' in m) s.requireEncryption = !!m.requireEncryption;
         for (const k of ['pairPerHour', 'sendPerMinute']) if (k in m) { const v = Math.floor(+m[k]); if (!(v >= 0)) return json(res, 400, { error: k + ' must be a number >= 0' }); s[k] = v; }
         save();
         if (!s.suspended) for (const h of Object.keys(waiters)) flush(h);

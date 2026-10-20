@@ -15,6 +15,10 @@ let data = { handles: {}, queues: {} }; // handles: handle -> {tokenHash, create
 try { data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); data.handles ||= {}; data.queues ||= {}; } catch {}
 data.settings ||= {}; data.settings.suspended = !!data.settings.suspended;
 data.settings.pairPerHour = +data.settings.pairPerHour || 0; data.settings.sendPerMinute = +data.settings.sendPerMinute || 0;
+data.settings.requireEncryption = !!data.settings.requireEncryption;
+const B64 = /^[A-Za-z0-9+/=]{1,200000}$/;
+function validKey(k, len) { return typeof k === 'string' && B64.test(k) && Buffer.from(k, 'base64').length === len; } // SPKI DER: x25519/ed25519 = 44 bytes
+function validEnc(e) { return e && typeof e === 'object' && e.v === 1 && validKey(e.epk, 44) && typeof e.nonce === 'string' && B64.test(e.nonce) && typeof e.ct === 'string' && B64.test(e.ct) && typeof e.sig === 'string' && B64.test(e.sig); }
 data.stats ||= { day: '', count: 0 };
 function save() {
   const tmp = DATA_FILE + '.tmp';
@@ -45,7 +49,7 @@ function fireWebhook(msg) { // fire-and-forget; never blocks or fails the send
   const w = (data.handles[msg.to] || {}).webhook;
   if (!w) return;
   const rec = st => { const h = data.handles[msg.to]; if (h) { h.lastWebhookAt = new Date().toISOString(); h.lastWebhookStatus = st; save(); } };
-  fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify({ from: msg.from, text: msg.text, ts: msg.ts }), signal: AbortSignal.timeout(5000) })
+  fetch(w.url, { method: 'POST', headers: { ...w.headers, 'content-type': 'application/json' }, body: JSON.stringify(msg.enc ? { from: msg.from, ts: msg.ts, encrypted: true } : { from: msg.from, text: msg.text, ts: msg.ts }), signal: AbortSignal.timeout(5000) })
     .then(r => rec(r.ok ? 'ok' : 'http ' + r.status))
     .catch(e => { console.log('webhook failed for @' + msg.to + ': ' + e.message); rec('error: ' + e.message); });
 }
@@ -88,7 +92,7 @@ function checkSend(me, to) { // returns [code, error] or null
   return null;
 }
 function logMsg(msg) {
-  msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, size: Buffer.byteLength(msg.text), text: msg.text });
+  msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, encrypted: !!msg.enc, size: msg.enc ? Buffer.byteLength(msg.enc.ct, 'base64') - 16 : Buffer.byteLength(msg.text), text: msg.enc ? '(end-to-end encrypted)' : msg.text });
   if (msgLog.length > 500) msgLog.shift();
   const day = msg.ts.slice(0, 10);
   if (data.stats.day !== day) data.stats = { day, count: 0 };
@@ -111,15 +115,29 @@ http.createServer((req, res) => {
       json(res, 200, { handle, token });
     }, res);
   }
+  const km = /^\/keys\/@?([a-z0-9_-]{3,32})$/.exec(u.pathname);
+  if (req.method === 'GET' && km) { const h = data.handles[km[1]]; if (!h || !h.keys) return json(res, 404, { error: 'no keys for handle' }); return json(res, 200, { handle: km[1], ...h.keys }); }
   const me = authed(req);
+  if (req.method === 'POST' && u.pathname === '/keys') {
+    if (!me) return json(res, 401, { error: 'invalid or missing token' });
+    return body(req, m => {
+      if (!validKey(m.x25519, 44) || !validKey(m.ed25519, 44)) return json(res, 400, { error: 'x25519 and ed25519 must be base64 SPKI DER public keys' });
+      const h = data.handles[me]; h.keys = { x25519: m.x25519, ed25519: m.ed25519, updated: new Date().toISOString() }; save();
+      json(res, 200, { ok: true });
+    }, res);
+  }
   if (req.method === 'POST' && u.pathname === '/send') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
     return body(req, m => {
       const to = String(m.to || '').replace(/^@/, '');
-      if (!to || !m.text) return json(res, 400, { error: 'to and text required' });
+      const enc = m.enc;
+      if (!to || (!m.text && !enc)) return json(res, 400, { error: 'to and text (or enc) required' });
+      if (enc && !validEnc(enc)) return json(res, 400, { error: 'invalid encrypted envelope' });
+      if (!enc && data.settings.requireEncryption) return json(res, 400, { error: 'this relay requires end-to-end encryption; update the CLI (git pull) and retry' });
       if (!data.handles[to]) return json(res, 404, { error: 'unknown recipient' });
       const deny = checkSend(me, to); if (deny) return json(res, deny[0], { error: deny[1] });
-      const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, text: String(m.text), ts: new Date().toISOString() };
+      const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, ts: new Date().toISOString() };
+      if (enc) msg.enc = { v: 1, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; }
       (data.queues[to] ||= []).push(msg);
       logMsg(msg);
       save();
@@ -132,7 +150,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && u.pathname === '/status') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
     const h = data.handles[me];
-    return json(res, 200, { handle: me, webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, lastPollAt: h.lastSeen || null });
+    return json(res, 200, { handle: me, webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: data.settings.requireEncryption, lastPollAt: h.lastSeen || null });
   }
   if (req.method === 'GET' && u.pathname === '/poll') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });
