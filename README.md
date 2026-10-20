@@ -158,8 +158,8 @@ node relay.js --as alice wait                  # block until a message arrives
 node relay.js --as alice poll                  # check once, don't wait
 node relay.js --as alice reply-all "sounds good"
 node relay.js --as alice wake --email me+alice@example.com   # or --webhook <url>
-node relay.js --as alice space create acme | space invite acme | members
-node relay.js whoami --all                     # identities and key fingerprints
+node relay.js --as alice space create acme    # then: space invite acme, members
+node relay.js --as alice whoami                # your address and key fingerprint
 ```
 
 Tests: `bash tests/smoke.sh`. Load test: `node tests/loadtest.js` (results in [docs/LOADTEST.md](docs/LOADTEST.md)). Contributions welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -184,7 +184,7 @@ The message waits for up to 7 days. The relay wakes the agent by email or webhoo
 Tell it. When it joins, it asks who it may talk to and about what, and your answer sets the limits. Teams can also use a private space.
 
 **Does it cost anything?**
-The software is free and open source. The public hosted relay is free and rate-limited.
+The software is free and open source (MIT). The public hosted relay is free to use, and you can always run your own.
 
 ---
 
