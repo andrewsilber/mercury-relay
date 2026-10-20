@@ -161,6 +161,9 @@ OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys pu
 $R --as bob@acme poll >/dev/null
 OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys published)" && echo "$OUT" | grep -q "@dana" || sfail "members: $OUT"
 $R --as smoke-a members acme | grep -q "bob@acme" || sfail "owner members view"
+BT="$(node -e 'const fs=require("fs"),d=process.env.HOME+"/.mercury-relay/";for(const f of fs.readdirSync(d))if(/^bob@acme\.json$/.test(f))console.log(JSON.parse(fs.readFileSync(d+f)).token)')"
+command curl -s -o /dev/null -H "authorization: Bearer $BT" -H 'X-Relay-Client: 9.9.9' -H 'X-Relay-Client-Dirty: 1' "$URL/status"
+OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob .*client 9.9.9 (unofficial version) (modified)" && echo "$OUT" | grep "@dana" | grep -q "client $VER" && ! echo "$OUT" | grep "@dana" | grep -q unofficial || sfail "members client version flags: $OUT"
 OUT="$($R --as dana members 2>&1 || true)"; echo "$OUT" | grep -q "no member list" || sfail "public members: $OUT"
 OUT="$($R --as smoke-g members acme 2>&1 || true)"; echo "$OUT" | grep -q "only members" || sfail "outsider members: $OUT"
 sleep 0.5; DUMP data | grep -qF "$SM" && sfail "space plaintext in data file"
@@ -319,4 +322,6 @@ A "$URL/admin/api/storage" | grep -q '"max":1000' || fail "message log cap not r
 grep -q "dana@acme" "$TMP/cli-output.log" || { echo "FAIL: output log not captured"; exit 1; }
 grep -E '@[a-z0-9_-]+@' "$TMP/cli-output.log" && { echo "FAIL: CLI printed a double-@ address (above)"; exit 1; }
 echo "PASS: no double-@ addresses in CLI output"
+VT="$(curl -s -d '{"handle":"vtest"}' "$URL/register" | sed -E 's/.*"token":"([a-f0-9]+)".*/\1/')"; command curl -s -o /dev/null -H "authorization: Bearer $VT" -H 'X-Relay-Client: 9.9.9' -H 'X-Relay-Client-Dirty: 1' "$URL/status"
+A "$URL/admin/api/handles?q=vtest" | grep -q '"client":{"version":"9.9.9","official":false,"modified":true}' || fail "admin client version flags"
 echo "PASS: admin login, message log, suspend/resume, block, rate limit, delete, persistence"

@@ -27,7 +27,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
   }
   function handleView(name) {
     const h = data.handles[name];
-    return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active' };
+    return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active', client: relay.clientInfo(name) };
   }
   function stats() {
     const today = new Date().toISOString().slice(0, 10);
@@ -60,7 +60,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
     if (req.method === 'POST' && p === '/admin/api/logout') { sessions.delete(tok); res.setHeader('set-cookie', cookie('', 0)); return json(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/admin/api/state') {
       const lite = u.searchParams.get('lite') === '1';
-      return json(res, 200, { publicUrl: publicUrl(req), clientRepo: require('./client-repo'), stats: { ...stats(), messagesLogged: msgLog.length }, settings: data.settings, limits: relay.limits, handles: lite ? undefined : Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length, memberList: lite || name === 'public' ? undefined : Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length })) })) });
+      return json(res, 200, { publicUrl: publicUrl(req), clientRepo: require('./client-repo'), stats: { ...stats(), messagesLogged: msgLog.length }, settings: data.settings, limits: relay.limits, handles: lite ? undefined : Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length, memberList: lite || name === 'public' ? undefined : Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length, client: relay.clientInfo(k) })) })) });
     }
     if (req.method === 'GET' && p === '/admin/api/messages') {
       const withText = u.searchParams.get('text') === '1', q = String(u.searchParams.get('q') || '').toLowerCase();

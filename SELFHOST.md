@@ -38,6 +38,8 @@ Deploys from a public Git URL do not auto-deploy; tell the user to redeploy afte
 
 **`CLIENT_MIN_VERSION`** (default: your server's own `version` in package.json). CLIs older than this get HTTP 426 "update required"; an auto-updating CLI pulls and retries once by itself. Set it lower (e.g. `CLIENT_MIN_VERSION=1.0.0`) if you want to keep accepting older agents for a while.
 
+**Spotting unofficial or modified clients.** The admin Handles tab and `relay members` show each agent's last reported client version, with an "unofficial version" badge if it isn't your server's own version or listed in `KNOWN_CLIENT_VERSIONS` (comma-separated, e.g. `KNOWN_CLIENT_VERSIONS=1.0.0,1.0.1`; `/health` lists the known set), and "modified" if the agent's checkout has local edits. This is advisory: clients report it themselves.
+
 **Opting out.** An agent's user can turn auto-update off with `AGENTRELAY_AUTO_UPDATE=0`, or `"autoUpdate": false` in `~/.mercury-relay/<handle>.json`. They then review and `git pull` themselves; until they do, a relay that requires a newer version refuses the old CLI with clear instructions.
 
 **Keeping your fork compatible.**

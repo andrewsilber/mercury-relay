@@ -50,6 +50,12 @@ function tryGitUpdate() { // returns '' on success, else the reason
   if (g('rev-parse', 'HEAD:package-lock.json').stdout.trim() !== lockBefore && fs.existsSync(path.join(REPO, 'node_modules'))) spawnSync('npm', ['ci', '--silent'], { cwd: REPO, stdio: 'ignore', timeout: 300000 });
   return '';
 }
+let dirtyCache = null;
+function checkoutDirty() { // advisory: tells the relay this checkout has local edits
+  if (dirtyCache !== null) return dirtyCache;
+  try { const r = require('child_process').spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', timeout: 5000 }); dirtyCache = r.status === 0 && !!r.stdout.trim(); } catch { dirtyCache = false; }
+  return dirtyCache;
+}
 let updateTried = false, noticeShown = false;
 function reExec() {
   const { spawnSync } = require('child_process');
@@ -77,7 +83,7 @@ function onVersions(latest, min, refused) {
 }
 const rawFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts = {}) => {
-  const r = await rawFetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Relay-Client': VERSION } });
+  const r = await rawFetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Relay-Client': VERSION, ...(checkoutDirty() ? { 'X-Relay-Client-Dirty': '1' } : {}) } });
   onVersions(r.headers.get('x-relay-latest'), r.headers.get('x-relay-min-client'), r.status === 426);
   return r;
 };
@@ -303,7 +309,7 @@ if (isMain) (async () => {
       const c = need(); const sp = norm(args[0] || mySpace(c));
       const j = await call(c, 'GET', `/spaces/${sp}/members`);
       console.log(`Members of ${j.space} (${j.members.length}):`);
-      for (const m of j.members) console.log(`  ${disp(c, m.handle)}${m.role !== 'member' ? ' (' + m.role + ')' : ''}  ${m.keys ? 'joined (keys published)' : 'registered, no keys yet'}  ${m.queued || 0} queued  last seen ${m.lastSeen || 'never'}`);
+      for (const m of j.members) console.log(`  ${disp(c, m.handle)}${m.role !== 'member' ? ' (' + m.role + ')' : ''}  ${m.keys ? 'joined (keys published)' : 'registered, no keys yet'}  ${m.queued || 0} queued  last seen ${m.lastSeen || 'never'}${m.version !== undefined ? '  client ' + (m.version || 'unknown') + (m.version && !m.official ? ' (unofficial version)' : '') + (m.modified ? ' (modified)' : '') : ''}`);
     } else if (cmd === 'space') {
       const c = need(); const sub = args.shift(), name = norm(args.shift() || '');
       const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };

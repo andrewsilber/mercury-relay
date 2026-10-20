@@ -14,6 +14,7 @@ const store = DATABASE_URL ? createPgStore({ url: DATABASE_URL, schema: process.
 const parseSize = v => { const m = /^(\d+)\s*([kKmM]?)[bB]?$/.exec(String(v || '').trim()); return m ? +m[1] * ({ k: 1024, m: 1048576 }[m[2].toLowerCase()] || 1) : 0; };
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
 const limits = { attachMax: parseSize(process.env.ATTACH_MAX) || 256 * 1024, adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
+limits.serverVersion = require('../package.json').version; limits.knownClientVersions = String(process.env.KNOWN_CLIENT_VERSIONS || '').split(',').map(v => v.trim()).filter(Boolean);
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
 const backup = DATABASE_URL ? { enabled: false, reason: 'postgres: use your provider\'s backups plus GET /admin/api/export' } : require('./backup.js')({ getData: () => relay.data, dir: process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(DATA_FILE)), 'backups'), intervalMs: process.env.BACKUP_INTERVAL != null && process.env.BACKUP_INTERVAL !== '' ? parseDur(process.env.BACKUP_INTERVAL) : 6 * 3600e3, keep: Math.max(1, +process.env.BACKUP_KEEP || 14), firstDelayMs: +process.env.BACKUP_FIRST_DELAY_MS || 60e3 });
 // Flush pending writes on deploy/restart so nothing is lost.
@@ -63,7 +64,7 @@ http.createServer((req, res) => {
     if (!f.startsWith(root + path.sep)) { res.writeHead(404); return res.end(); }
     return fs.readFile(f, (e, b) => { if (e) { res.writeHead(404); return res.end('not found'); } res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store' }); res.end(b); });
   }
-  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, clientRepo: require('./client-repo'), version: LATEST, latest: LATEST, minClient: MIN_CLIENT, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, clientRepo: require('./client-repo'), version: LATEST, latest: LATEST, minClient: MIN_CLIENT, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, knownClientVersions: [LATEST, ...limits.knownClientVersions.filter(v => v !== LATEST)], emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
   if (!(req.method === 'GET' && /^\/invites\//.test(u.pathname)) && clientTooOld(req.headers['x-relay-client'])) return json(res, 426, { error: 'update required', min: MIN_CLIENT, latest: LATEST, how: 'git pull in your relay checkout' });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const ivm = /^\/invites\/([^/]{1,64})$/.exec(u.pathname);
@@ -71,6 +72,7 @@ http.createServer((req, res) => {
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];
   const me = relay.auth(bearer);
+  if (me) relay.noteClient(me, req.headers['x-relay-client'], req.headers['x-relay-client-dirty'] === '1');
   if (req.method === 'GET' && km) return reply(res, relay.getKeys(decodeURIComponent(km[1]), me));
   if (req.method === 'GET' && u.pathname === '/poll') {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });

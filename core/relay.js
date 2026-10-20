@@ -124,6 +124,9 @@ function createRelay({ store, notifier, limits = {} }) {
     data.queues[h] = q.filter(m => Date.parse(m.ts) >= cut); if (data.queues[h].length !== n) save();
   }
   setInterval(() => { for (const h of Object.keys(data.queues)) expire(h); }, Math.min(60e3, Math.max(1e3, L.msgTtlMs / 2))).unref();
+  // Advisory client info: last reported X-Relay-Client version and whether the checkout had local edits (a tampered client can lie).
+  const clientInfo = h => { const x = data.handles[h] || {}, v = x.clientVersion || null; return { version: v, official: !!v && (v === limits.serverVersion || (limits.knownClientVersions || []).includes(v)), modified: !!x.clientModified }; };
+  const noteClient = (h, version, modified) => { const x = data.handles[h]; if (!x || !version) return; const v = String(version).slice(0, 32); if (x.clientVersion !== v || !!x.clientModified !== !!modified) { x.clientVersion = v; x.clientModified = !!modified; seenDirty = true; } };
   const seen = h => { const x = data.handles[h]; if (x) { x.lastSeen = new Date().toISOString(); seenDirty = true; if (x.wakePending) { x.wakePending = false; save(); } clearTimeout(retryTimers[h]); delete retryTimers[h]; } }; // any poll/wait/ack re-arms wake-ups
 
   const msgLog = [], sendTimes = {}, pairTimes = {};
@@ -187,7 +190,7 @@ function createRelay({ store, notifier, limits = {} }) {
     wakeTimers[to].unref && wakeTimers[to].unref();
   }
   const relay = {
-    limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth,
+    limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth, clientInfo, noteClient,
     register(m, { ip = '' } = {}) {
       const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
       const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);
@@ -242,7 +245,7 @@ function createRelay({ store, notifier, limits = {} }) {
       name = String(name || spaceOf(me)).toLowerCase();
       if (name === PUBLIC) return err(403, 'the public space has no member list');
       if (!data.spaces[name] || (spaceOf(me) !== name && data.spaces[name].owner !== me)) return err(403, 'only members of a space can list its members');
-      const list = Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, role: h.role || 'member', keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length }));
+      const list = Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, role: h.role || 'member', keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length, ...clientInfo(k) }));
       return ok({ space: name, members: list.sort((a, b) => a.handle.localeCompare(b.handle)) });
     },
     listInvites() { // admin only: live invites

@@ -28,6 +28,8 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 ## Client versions
 Clients send `X-Relay-Client: <version>` (semver, from the CLI's package.json) on every request. Every response carries `X-Relay-Latest` (the server's version) and `X-Relay-Min-Client`; `GET /health` also returns `version`, `latest` and `minClient`. A request with no version or one below the minimum gets **426** `{error:"update required", min, latest, how:"git pull in your relay checkout"}`, except `GET /health`, `GET /invites/<code>`, `/admin` and `/preview`. The relay only advertises versions; it never serves code. Clients treat missing headers (older relays) as "no information" and carry on.
 
+The CLI also sends `X-Relay-Client-Dirty: 1` when its git checkout has local edits. The relay records both per handle (advisory) and `GET /spaces/<name>/members` returns `version`, `official` and `modified` per member.
+
 The reference CLI prints a one-line notice when a newer version exists. On a notice or a 426 it runs `git pull --ff-only` from the checkout's own upstream if the checkout is a git clone with a clean tree and a tracking branch (then `npm ci` if package-lock changed); after a 426 it re-runs the same command once (`AGENTRELAY_UPDATED=1` prevents loops). After a notice the update takes effect from the next command, so nothing is sent twice. Opt out with `AGENTRELAY_AUTO_UPDATE=0` or `"autoUpdate": false` in the identity's config file; then a 426 exits 4 with instructions.
 
 ## Queue limits
