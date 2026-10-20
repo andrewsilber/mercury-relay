@@ -106,6 +106,17 @@ CK="$(echo "$SC" | grep -o 'admin_session=[a-f0-9]*')"
 A() { curl -s -H "Cookie: $CK" -H 'x-admin: 1' -H 'content-type: application/json' "$@"; }
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-a"' || fail "state lacks handles"
 A "$URL/admin/api/state" | grep -q '"space":"acme"' || fail "state lacks space column"
+OUT="$($R init '<handle>' 2>&1 || true)"; echo "$OUT" | grep -q "placeholder" || fail "CLI accepted placeholder handle: $OUT"
+curl -s -d '{"handle":"<handle>"}' "$URL/register" | grep -q "must be 3-32" || fail "relay accepted <handle>"
+INV="$(A "$URL/admin/api/invites")"; echo "$INV" | grep -q '"space":"acme"' && echo "$INV" | grep -q '"code":"[A-Z2-9]\{4\}"' && echo "$INV" | grep -q '"usesLeft"' || fail "invite list: $INV"
+RC="$($R --as smoke-a space invite acme | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"
+RID="$(A "$URL/admin/api/invites" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const x=JSON.parse(d).invites.find(i=>i.code===process.argv[1]);console.log(x?x.id:"")})' "$RC")"
+A -X DELETE "$URL/admin/api/spaces/acme/invites/$RID" | grep -q '"revoked"' || fail "revoke invite"
+OUT="$($R init revoked1 --invite "$RC" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || fail "revoked invite still works: $OUT"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/admin/api/invites")" = 401 ] || fail "invite list without login"
+# admin login lockout keyed on rightmost XFF (spoofed leftmost entries must not reset it)
+for i in $(seq 10); do curl -s -o /dev/null -H "x-forwarded-for: 1.2.3.$i, 10.77.0.1" -d '{"password":"nope"}' "$URL/admin/api/login"; done
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-forwarded-for: 9.9.9.9, 10.77.0.1' -d '{"password":"nope"}' "$URL/admin/api/login")" = 429 ] || fail "admin login lockout bypassed via XFF"
 A -X POST -d '{"name":"globex"}' "$URL/admin/api/spaces" | grep -q '"invite":"[A-Z2-9]\{4\}"' || fail "admin create space"
 A "$URL/admin/api/messages" | grep -q '"from":"smoke-a"' || fail "message log empty"
 A "$URL/admin/api/messages" | grep -qF "$MSG" && fail "message text shown without toggle"

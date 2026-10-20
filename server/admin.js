@@ -9,7 +9,7 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
   const attempts = new Map(); // ip -> [ms]
   const pwHash = crypto.createHash('sha256').update(PW).digest();
   const pwOk = p => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(p || '')).digest(), pwHash);
-  const ipOf = req => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const ipOf = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); }; // rightmost XFF (proxy-added); leftmost is client-controlled
   function session(req) {
     const m = /(?:^|;\s*)admin_session=([a-f0-9]{64})/.exec(req.headers.cookie || '');
     if (!m) return null;
@@ -70,6 +70,9 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
       }, res);
     }
     if (req.method === 'POST' && p === '/admin/api/spaces') return body(req, m => { const r = relay.createSpaceAsOperator(m); json(res, r.code, r.body); }, res);
+    if (req.method === 'GET' && p === '/admin/api/invites') return json(res, 200, { invites: relay.listInvites() });
+    const rv = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})\/invites\/([a-f0-9]{16})$/.exec(p);
+    if (req.method === 'DELETE' && rv) { const r = relay.revokeInvite(rv[1], rv[2]); return json(res, r.code, r.body); }
     const sm = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})\/invites$/.exec(p);
     if (req.method === 'POST' && sm) return body(req, m => { const r = relay.createInviteAsOperator(sm[1], m); json(res, r.code, r.body); }, res);
     const hm = /^\/admin\/api\/handles\/([a-z0-9_-]{3,32}(?:@[a-z0-9_-]{3,32})?)(?:\/(status))?$/.exec(p);

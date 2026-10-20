@@ -65,7 +65,7 @@ function createRelay({ store, notifier }) {
     for (let i = 0; i < 50; i++) { code = Array.from(crypto.randomBytes(4), b => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(''); if (!findInvite(code)) break; code = null; } // unique among live invites
     if (!code) return err(503, 'could not allocate an invite code, try again');
     const exp = new Date(Date.now() + ttl).toISOString();
-    (data.spaces[sp].invites ||= {})[codeHashes(code)[0]] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString() };
+    (data.spaces[sp].invites ||= {})[codeHashes(code)[0]] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString(), code }; // plaintext kept for the admin list only (short-lived, admin-only)
     save();
     return ok({ space: sp, invite: code, maxUses, expires: exp });
   }
@@ -176,6 +176,15 @@ function createRelay({ store, notifier }) {
       return newInvite(name, me, m);
     },
     createInviteAsOperator(name, m) { return data.spaces[name] && name !== PUBLIC ? newInvite(name, 'operator', m) : err(404, 'unknown space'); },
+    listInvites() { // admin only: live invites
+      pruneInvites(); const out = [];
+      for (const [space, sp] of Object.entries(data.spaces)) for (const [id, inv] of Object.entries(sp.invites || {})) out.push({ id: id.slice(0, 16), space, code: inv.code || null, usesLeft: inv.maxUses - inv.uses, maxUses: inv.maxUses, expires: inv.expires, created: inv.created || null, role: inv.role, by: inv.by || null });
+      return out.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+    },
+    revokeInvite(space, id) {
+      const sp = data.spaces[space]; const k = sp && Object.keys(sp.invites || {}).find(h => h.slice(0, 16) === id);
+      if (!k) return err(404, 'unknown invite'); delete sp.invites[k]; save(); return ok({ ok: true, revoked: id });
+    },
     findInviteSpace(code) { const f = findInvite(code); return f ? f.space : null; },
     createSpaceAsOperator(m) { const r = relay.createSpace('operator', m); if (r.code === 200) data.spaces[r.body.space].owner = null; return r; },
     getKeys(addr, viewer) { // private-space keys are visible only to members of that space

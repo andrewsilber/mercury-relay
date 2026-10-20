@@ -136,6 +136,7 @@ if (isMain) (async () => {
       let space = flag('--space'); const invite = flag('--invite');
       let raw = (args[0] || '').replace(/^@/, '');
       if (!raw) { console.error('usage: relay init <handle> [--url URL] [--invite <CODE>] [--space <name>]'); process.exit(2); }
+      if (/[<>]/.test(raw) || /^(handle|your-handle|name)$/i.test(raw)) { console.error('That looks like a placeholder, not a handle. Ask the user which handle they want (suggest one based on your own name), then run init again.'); process.exit(2); }
       if (raw.includes('@')) { space ||= raw.split('@')[1]; raw = raw.split('@')[0]; }
       space = space ? norm(space) : (invite ? '' : 'public'); // with --invite alone the relay resolves the space from the code
       const handle = norm(raw);
