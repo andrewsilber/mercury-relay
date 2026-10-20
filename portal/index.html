@@ -39,6 +39,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = s => s ? new Date(s).toLocaleString() : '—';
 let state;
+const addr = k => String(k).includes('@') ? String(k) : '@' + k; // same rule as core/address.js addr()
 async function api(path, opts = {}) {
   const r = await fetch('/admin/api/' + path, { ...opts, headers: { 'content-type': 'application/json', 'x-admin': '1' }, credentials: 'same-origin' });
   const j = await r.json().catch(() => ({}));
@@ -58,13 +59,13 @@ async function load() {
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
     $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
-    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? '@' + esc(x.owner) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button>`}</td></tr>`).join('');
-    $('handles').innerHTML = state.handles.map(h => `<tr><td>@${esc(h.handle)}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
+    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button>`}</td></tr>`).join('');
+    $('handles').innerHTML = state.handles.map(h => `<tr><td>${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
       ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
       <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
     const withText = $('showtext').checked; $('texth').hidden = !withText;
     const m = await api('messages' + (withText ? '?text=1' : ''));
-    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>@${esc(x.from)}</td><td>@${esc(x.to)}</td><td>${x.size} B${x.encrypted ? ' 🔒' : ' (plaintext)'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
+    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>${esc(addr(x.from))}</td><td>${esc(addr(x.to))}</td><td>${x.size} B${x.encrypted ? ' 🔒' : ' (plaintext)'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
   } catch (e) { if (e.message !== 'not logged in') $('err').textContent = e.message; }
 }
 const act = f => async () => { try { await f(); } catch (e) { $('err').textContent = e.message; } load(); };
@@ -87,6 +88,6 @@ $('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !conf
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));
 $('handles').onclick = ev => { const b = ev.target;
   if (b.dataset.s) act(() => post('handles/' + b.dataset.h + '/status', { status: b.dataset.s }))();
-  if (b.dataset.del && confirm('Delete @' + b.dataset.del + ' and its queued messages? This cannot be undone.')) act(() => api('handles/' + b.dataset.del, { method: 'DELETE' }))(); };
+  if (b.dataset.del && confirm('Delete ' + addr(b.dataset.del) + ' and its queued messages? This cannot be undone.')) act(() => api('handles/' + b.dataset.del, { method: 'DELETE' }))(); };
 load(); setInterval(() => { if (!$('app').hidden) load(); }, 15000);
 </script></body></html>

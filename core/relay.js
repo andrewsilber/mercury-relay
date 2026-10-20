@@ -1,5 +1,6 @@
 // relay-core: all relay logic, no HTTP. createRelay({ store, notifier }) -> methods returning { code, body }.
 const crypto = require('crypto');
+const { addr } = require('./address.js');
 const HANDLE_RE = /^[a-z0-9_-]{3,32}$/;
 const EMAIL_RE = /^[^\s@<>,;]{1,64}@[^\s@<>,;]{1,255}$/;
 const B64 = /^[A-Za-z0-9+/=]{1,200000}$/;
@@ -86,7 +87,7 @@ function createRelay({ store, notifier }) {
     if ((data.handles[to] || {}).status === 'blocked') return err(403, 'recipient blocked by admin');
     const now = Date.now(), st1 = recent(sendTimes[me] ||= [], 60e3, now), pk = [me, to].sort().join('|'), st2 = recent(pairTimes[pk] ||= [], 3600e3, now);
     if (S.sendPerMinute > 0 && st1.length >= S.sendPerMinute) return err(429, 'rate limit: max ' + S.sendPerMinute + ' sends per minute per handle');
-    if (S.pairPerHour > 0 && st2.length >= S.pairPerHour) return err(429, 'rate limit: max ' + S.pairPerHour + ' messages per hour between @' + me + ' and @' + to);
+    if (S.pairPerHour > 0 && st2.length >= S.pairPerHour) return err(429, 'rate limit: max ' + S.pairPerHour + ' messages per hour between ' + addr(me) + ' and ' + addr(to));
     st1.push(now); st2.push(now);
     return null;
   }
@@ -159,7 +160,7 @@ function createRelay({ store, notifier }) {
       if (!m.to || (!m.text && !enc)) return err(400, 'to and text (or enc) required');
       const a = parseAddr(m.to, spaceOf(me)); if (a.error) return err(400, a.error);
       const to = a.key, mySpace = spaceOf(me);
-      if (a.space !== mySpace) return err(403, `cross-space messaging is not enabled (you are in ${mySpace}, @${a.key} would be in ${a.space}); space-to-space grants are coming later`);
+      if (a.space !== mySpace) return err(403, `cross-space messaging is not enabled (you are in ${mySpace}, ${addr(a.key)} is in ${a.space}); space-to-space grants are coming later`);
       if (enc && !validEnc(enc)) return err(400, 'invalid encrypted envelope');
       if (!enc && S.requireEncryption) return err(400, 'this relay requires end-to-end encryption; update the CLI (git pull) and retry');
       if (!data.handles[to]) return err(404, 'unknown recipient');

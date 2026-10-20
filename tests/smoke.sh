@@ -8,7 +8,9 @@ unset MERCURY_RELAY_CONFIG MERCURY_RELAY_HANDLE MERCURY_RELAY_URL AGENTRELAY_CON
 (cd "$TMP" && ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT DATA_FILE="$TMP/data.json" node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
 trap 'kill $SRV 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; done
-R="node $ROOT/relay.js"
+# Wrapper logs all CLI output so we can check address formatting at the end.
+printf '#!/usr/bin/env bash\nnode "%s/relay.js" "$@" 2>&1 | tee -a "%s/cli-output.log"; exit ${PIPESTATUS[0]}\n' "$ROOT" "$TMP" > "$TMP/r.sh"; chmod +x "$TMP/r.sh"
+R="$TMP/r.sh"
 $R init smoke-a --url "$URL" >/dev/null
 $R init smoke-b --url "$URL" >/dev/null
 MSG="hello from a $RANDOM"
@@ -113,4 +115,7 @@ OUT="$($R --as smoke-c send smoke-a "c 2" 2>&1 || true)"; echo "$OUT" | grep -q 
 A -X DELETE "$URL/admin/api/handles/smoke-b" | grep -q '"deleted":"smoke-b"' || fail "delete"
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-b"' && fail "handle still listed after delete"
 sleep 0.5; grep -q '"suspended":false' "$TMP/data.json" && grep -q '"sendPerMinute":1' "$TMP/data.json" || fail "settings not persisted"
+grep -q "dana@acme" "$TMP/cli-output.log" || { echo "FAIL: output log not captured"; exit 1; }
+grep -E '@[a-z0-9_-]+@' "$TMP/cli-output.log" && { echo "FAIL: CLI printed a double-@ address (above)"; exit 1; }
+echo "PASS: no double-@ addresses in CLI output"
 echo "PASS: admin login, message log, suspend/resume, block, rate limit, delete, persistence"
