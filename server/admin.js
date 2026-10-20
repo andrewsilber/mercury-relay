@@ -19,6 +19,12 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
     return m[1];
   }
   function cookie(tok, maxAge) { return 'admin_session=' + tok + '; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=' + maxAge; }
+  // ?limit&offset paging; no limit => everything (backward compatible). limit capped at 500.
+  function paged(list, u) {
+    const lim = u.searchParams.get('limit'), offset = Math.max(0, Math.floor(+u.searchParams.get('offset') || 0));
+    const limit = lim == null ? list.length : Math.min(500, Math.max(1, Math.floor(+lim) || 25));
+    return { page: list.slice(offset, offset + limit), total: list.length, offset, limit };
+  }
   function handleView(name) {
     const h = data.handles[name];
     return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active' };
@@ -53,11 +59,23 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
     if (req.method === 'POST' && req.headers['x-admin'] !== '1') return json(res, 403, { error: 'missing X-Admin header' }); // CSRF belt-and-braces
     if (req.method === 'POST' && p === '/admin/api/logout') { sessions.delete(tok); res.setHeader('set-cookie', cookie('', 0)); return json(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/admin/api/state') {
-      return json(res, 200, { publicUrl: publicUrl(req), stats: stats(), settings: data.settings, limits: relay.limits, handles: Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length, memberList: name === 'public' ? [] : Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length })) })) });
+      const lite = u.searchParams.get('lite') === '1';
+      return json(res, 200, { publicUrl: publicUrl(req), stats: { ...stats(), messagesLogged: msgLog.length }, settings: data.settings, limits: relay.limits, handles: lite ? undefined : Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length, memberList: lite || name === 'public' ? undefined : Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length })) })) });
     }
     if (req.method === 'GET' && p === '/admin/api/messages') {
-      const withText = u.searchParams.get('text') === '1';
-      return json(res, 200, { messages: msgLog.slice().reverse().map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size, encrypted: m.encrypted }) });
+      const withText = u.searchParams.get('text') === '1', q = String(u.searchParams.get('q') || '').toLowerCase();
+      let list = msgLog.slice().reverse();
+      if (q) list = list.filter(m => m.from.includes(q) || m.to.includes(q) || (withText && typeof m.text === 'string' && m.text.toLowerCase().includes(q)));
+      const { page, total, offset, limit } = paged(list, u);
+      return json(res, 200, { total, offset, limit, messages: page.map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size, encrypted: m.encrypted }) });
+    }
+    if (req.method === 'GET' && p === '/admin/api/handles') { // ?q&space&limit&offset
+      const q = String(u.searchParams.get('q') || '').toLowerCase(), sp = u.searchParams.get('space');
+      let list = Object.keys(data.handles).sort();
+      if (sp) list = list.filter(k => (data.handles[k].space || 'public') === sp);
+      if (q) list = list.filter(k => k.includes(q) || (data.handles[k].space || 'public').includes(q) || (data.handles[k].status || 'active') === q);
+      const { page, total, offset, limit } = paged(list, u);
+      return json(res, 200, { total, offset, limit, handles: page.map(handleView) });
     }
     if (req.method === 'POST' && p === '/admin/api/settings') {
       return body(req, m => {

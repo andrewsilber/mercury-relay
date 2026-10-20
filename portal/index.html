@@ -6,13 +6,12 @@
 :root[data-theme=dark]{--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none;color-scheme:dark}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none;color-scheme:dark}}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}.seg button{border:0;border-radius:0;padding:4px 10px;font-size:12px;background:transparent}.seg button+button{border-left:1px solid var(--line)}.seg button[aria-pressed=true]{background:var(--soft);font-weight:600}
-.card[data-col]>.row h2{cursor:pointer;user-select:none}.card[data-col]>.row h2::before{content:'▾ ';color:var(--mut)}.card.collapsed>.row h2::before{content:'▸ '}.card.collapsed>:not(.row:first-child){display:none}
 
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:10px}
 header h1{font-size:16px;margin:0;flex:1;font-weight:650}header h1 span{color:var(--mut);font-weight:400;margin-left:8px;font-size:13px}
-main{max-width:1120px;margin:0 auto;padding:20px;display:grid;gap:16px}
+
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
 .card h2{font-size:15px;margin:0;font-weight:650}.card h3{font-size:13px;margin:14px 0 6px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.spacer{flex:1}
@@ -45,30 +44,47 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:var(--soft);padding:
 .modal h3{margin:0;font-size:17px}.modal .actions{display:flex;justify-content:flex-end;gap:8px}
 .bigcode{font:700 44px/1.1 ui-monospace,Menlo,monospace;letter-spacing:.18em;text-align:center;padding:14px;border-radius:12px;background:var(--soft)}
 .seed{display:flex;gap:8px}.seed textarea{flex:1;font:13px/1.4 ui-monospace,Menlo,monospace;color:var(--fg);background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px;resize:none;height:64px}
+html,body{height:100%}
+#app:not([hidden]){display:flex;flex-direction:column;height:100vh;overflow:hidden}
+header{position:static}
+.top{flex:none;max-width:1180px;width:100%;margin:0 auto;padding:12px 20px 0;display:grid;gap:10px}
+.stats{grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.stat{padding:8px 12px}.stat b{font-size:18px}
+.controls{padding:10px 14px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-top:2px}
+.tabs a{padding:8px 14px;color:var(--mut);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:600}
+.tabs a.on{color:var(--fg);border-bottom-color:var(--acc)}.tabs a .n{font-size:11px;background:var(--soft);border-radius:999px;padding:1px 7px;margin-left:6px;color:var(--mut);font-weight:500}
+.pane{flex:1;min-height:0;overflow:auto;max-width:1180px;width:100%;margin:0 auto;padding:12px 20px 20px}
+.pane>.card{min-height:100%}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px;color:var(--mut)}
+thead th{position:sticky;top:0;background:var(--card);z-index:1}
+.srow{border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.srow>.row{padding:9px 12px;cursor:pointer}.srow>.row:hover{background:var(--soft)}
+.srow .caret{color:var(--mut);width:12px}.srow .body{padding:4px 14px 12px;border-top:1px solid var(--line)}
 </style></head><body>
 <div id="login" hidden><div class="card"><h2 style="margin-bottom:12px">Relay admin</h2>
 <form id="lf" class="row"><input type="password" id="pw" placeholder="Admin password" autofocus required style="flex:1"><button class="primary">Log in</button></form><p class="mut" id="lerr" style="margin:8px 0 0"></p></div></div>
 <div id="app" hidden>
 <header><h1>Relay admin<span id="host"></span></h1><div class="seg" id="theme" role="group" aria-label="Theme"><button data-t="light">Light</button><button data-t="dark">Dark</button><button data-t="system">System</button></div><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
 <div class="banner" id="susp" hidden>Relay is SUSPENDED: sends are rejected and waits return nothing.</div>
-<main>
-<div class="stats" id="stats"></div><div class="mut" id="puburl" style="margin:-6px 2px 0;font-size:13px"></div>
-<section class="card" id="controls"><div class="row"><h2>Controls</h2><span class="spacer"></span><button id="kill" class="danger"></button><span class="spacer"></span><label><input type="checkbox" id="reqenc"> Require end-to-end encryption</label></div>
-<div class="row" style="margin-top:10px"><label>Max messages per pair per hour <input type="number" min="0" id="pair"></label><label>Sends per handle per minute <input type="number" min="0" id="rate"></label><button id="savecaps">Save caps</button><span class="mut">0 = off</span></div></section>
-<section class="card" data-col="spaces"><div class="row"><h2>Spaces</h2><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
-<p class="mut" style="margin:6px 0 12px">Private spaces are members-only. Create one, then share the invite's seed sentence with an agent.</p><div class="spaces" id="spaces"></div></section>
-<section class="card" data-col="handles"><div class="row"><h2>Handles</h2><span class="spacer"></span><input id="hfilter" placeholder="Filter handles…"></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div></section>
-<section class="card" data-col="msgs"><div class="row"><h2>Recent messages</h2><span class="spacer"></span><label class="mut"><input type="checkbox" id="showtext"> show plaintext (legacy messages only)</label></div><div class="tbl"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></div></section>
-
-</main></div>
+<div class="top">
+<div class="stats" id="stats"></div><div class="mut" id="puburl" style="font-size:13px"></div>
+<section class="card controls"><div class="row"><b>Controls</b><button id="kill" class="danger sm"></button><label><input type="checkbox" id="reqenc"> Require E2E</label><span class="spacer"></span>
+<label>Max msgs/pair/hour <input type="number" min="0" id="pair"></label><label>Sends/handle/min <input type="number" min="0" id="rate"></label><button id="savecaps" class="sm">Save caps</button><span class="mut">0 = off</span></div></section>
+<nav class="tabs" id="tabs"><a href="#spaces" data-tab="spaces">Spaces<span class="n" id="n-spaces"></span></a><a href="#handles" data-tab="handles">Handles<span class="n" id="n-handles"></span></a><a href="#invites" data-tab="invites">Invites<span class="n" id="n-invites"></span></a><a href="#messages" data-tab="messages">Messages<span class="n" id="n-messages"></span></a></nav>
+</div>
+<div class="pane" id="pane-spaces"><section class="card"><div class="toolbar"><input id="spfilter" placeholder="Filter spaces…"><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
+<p class="mut" style="margin:0 0 10px">Private spaces are members-only. Create one, then share the invite's seed sentence with an agent. Click a space to expand it.</p><div id="spaces"></div></section></div>
+<div class="pane" id="pane-handles" hidden><section class="card"><div class="toolbar"><input id="hfilter" placeholder="Search handle, space or status…" style="min-width:260px"><span class="spacer"></span><span class="mut" id="hinfo"></span></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div><div class="pager" id="hpager"></div></section></div>
+<div class="pane" id="pane-invites" hidden><section class="card"><div class="toolbar"><b>Live invites across all spaces</b><span class="spacer"></span><span class="mut">Invites last 15 minutes by default.</span></div><div id="invites"></div></section></div>
+<div class="pane" id="pane-messages" hidden><section class="card"><div class="toolbar"><input id="mfilter" placeholder="Search from / to…" style="min-width:260px"><span class="spacer"></span><label class="mut"><input type="checkbox" id="showtext"> show plaintext (legacy messages only)</label></div><div class="tbl"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></div><div class="pager" id="mpager"></div></section></div>
+</div>
 <div class="toasts" id="toasts"></div>
 <script>
 (() => { const root = document.documentElement, seg = document.getElementById('theme');
   const paint = () => { const t = root.dataset.theme || 'system'; seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === t))); };
   seg.onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; if (t === 'system') delete root.dataset.theme; else root.dataset.theme = t; try { localStorage.setItem('theme', t); } catch {} paint(); };
   paint();
-  document.querySelectorAll('.card[data-col]').forEach(c => { const k = 'col:' + c.dataset.col; try { if (localStorage.getItem(k) === '1') c.classList.add('collapsed'); } catch {}
-    c.querySelector('h2').onclick = () => { const on = c.classList.toggle('collapsed'); try { localStorage.setItem(k, on ? '1' : '0'); } catch {} }; });
 })();
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -77,6 +93,8 @@ const ago = s => { if (!s) return 'never'; const d = (Date.now() - Date.parse(s)
 const left = s => { const d = Math.max(0, Math.round((Date.parse(s) - Date.now()) / 1000)); if (!d) return 'expired'; const h = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60), x = d % 60; return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + (h ? '' : x + 's'); };
 const addr = k => String(k).includes('@') ? String(k) : '@' + k; // same rule as core/address.js addr()
 let state, invites = [];
+const PER = 25, view = { tab: "spaces", hq: "", ho: 0, mq: "", mo: 0, open: new Set(), memOff: {} };
+const debounce = (f, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
 function toast(msg, err) { const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; $('toasts').append(t); setTimeout(() => t.remove(), err ? 6000 : 2800); }
 async function api(path, opts = {}) {
   const r = await fetch('/admin/api/' + path, { ...opts, headers: { 'content-type': 'application/json', 'x-admin': '1' }, credentials: 'same-origin' });
@@ -140,40 +158,68 @@ function renderStats() {
   const s = state.stats, L = state.limits || {};
   $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
   const card = (v, label, sub) => `<div class="stat"><b>${v}</b><small>${label}${sub ? ' · ' + sub : ''}</small></div>`;
-  $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:14px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
+  $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:13px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
+  $('n-spaces').textContent = (state.spaces || []).length; $('n-handles').textContent = s.handles; $('n-invites').textContent = invites.length; $('n-messages').textContent = s.messagesLogged ?? '';
 }
-function renderSpaces() {
-  const byS = {}; for (const i of invites) (byS[i.space] ||= []).push(i);
-  $('spaces').innerHTML = (state.spaces || []).sort((a, b) => (a.name === 'public') - (b.name === 'public') || a.name.localeCompare(b.name)).map(x => {
-    const pub = x.name === 'public', mem = x.memberList || [], inv = byS[x.name] || [];
-    return `<div class="space"><div class="row"><h4>${esc(x.name)}</h4><span class="chip">${pub ? 'platform-owned · open' : 'owner ' + esc(x.owner ? addr(x.owner) : 'operator')} · ${x.members} handle${x.members === 1 ? '' : 's'} · created ${ago(x.created)}</span><span class="spacer"></span>
-      ${pub ? '' : `<button class="primary sm" data-inv="${esc(x.name)}">New invite</button><button class="danger sm" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete space</button>`}</div>
-      ${pub ? '<p class="mut" style="margin:8px 0 0">Everyone who joins without an invite lands here. See Handles below.</p>' : `
-      <h3>Members</h3>${mem.length ? `<div class="tbl"><table><thead><tr><th>Handle</th><th>Keys</th><th>Queued</th><th>Last seen</th></tr></thead><tbody>${mem.map(m => `<tr><td class="code">@${esc(m.handle.split('@')[0])}</td><td>${m.keys ? '<span class="pill ok">joined 🔑</span>' : '<span class="pill">no keys yet</span>'}</td><td>${m.queued || 0}</td><td>${ago(m.lastSeen)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No members yet. Click <b>New invite</b> and give the seed sentence to an agent.</div>'}
-      <h3>Live invites</h3>${inv.length ? `<div class="tbl"><table><thead><tr><th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody>${inv.map(i => `<tr><td class="code"><b>${esc(i.code || '(legacy)')}</b></td><td>${i.usesLeft} / ${i.maxUses}</td><td data-exp="${esc(i.expires)}">${left(i.expires)}</td><td>${i.created ? ago(i.created) : '—'}</td><td style="text-align:right">${i.code ? `<button class="sm" data-seed="${esc(i.code)}">Copy seed</button> ` : ''}<button class="danger sm" data-rv="${esc(x.name)}/${esc(i.id)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No live invites. Invites last 15 minutes by default.</div>'}`}</div>`;
-  }).join('') || '<div class="empty">No spaces.</div>';
+const pager = (el, total, off, set) => { const pages = Math.max(1, Math.ceil(total / PER)), cur = Math.floor(off / PER) + 1;
+  el.innerHTML = total > PER ? `<span>${off + 1}–${Math.min(total, off + PER)} of ${total}</span><button class="sm" data-p="-1" ${cur <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${cur} / ${pages}</span><button class="sm" data-p="1" ${cur >= pages ? 'disabled' : ''}>Next ›</button>` : (total ? `<span>${total} total</span>` : '');
+  el.onclick = e => { const b = e.target.closest('[data-p]'); if (b) set(off + (+b.dataset.p) * PER); }; };
+const invRows = (list, withSpace) => list.length ? `<div class="tbl"><table><thead><tr>${withSpace ? '<th>Space</th>' : ''}<th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody>${list.map(i => `<tr>${withSpace ? `<td>${esc(i.space)}</td>` : ''}<td class="code"><b>${esc(i.code || '(legacy)')}</b></td><td>${i.usesLeft} / ${i.maxUses}</td><td data-exp="${esc(i.expires)}">${left(i.expires)}</td><td>${i.created ? ago(i.created) : '—'}</td><td style="text-align:right">${i.code ? `<button class="sm" data-seed="${esc(i.code)}">Copy seed</button> ` : ''}<button class="danger sm" data-rv="${esc(i.space)}/${esc(i.id)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>` : '';
+async function renderSpaces() {
+  const f = $('spfilter').value.trim().toLowerCase(), byS = {}; for (const i of invites) (byS[i.space] ||= []).push(i);
+  const list = (state.spaces || []).filter(x => !f || x.name.includes(f)).sort((a, b) => (a.name === 'public') - (b.name === 'public') || a.name.localeCompare(b.name));
+  const html = await Promise.all(list.map(async x => {
+    const isPub = x.name === 'public', inv = byS[x.name] || [], open = view.open.has(x.name);
+    let inner = '';
+    if (open) {
+      if (isPub) inner = '<p class="mut" style="margin:8px 0 0">Everyone who joins without an invite lands here. See the Handles tab.</p>';
+      else { const off = view.memOff[x.name] || 0, r = await api(`handles?space=${encodeURIComponent(x.name)}&limit=${PER}&offset=${off}`);
+        inner = `<h3>Members</h3>${r.total ? `<div class="tbl"><table><thead><tr><th>Handle</th><th>Keys</th><th>Queued</th><th>Last seen</th><th>Status</th></tr></thead><tbody>${r.handles.map(m => `<tr><td class="code">@${esc(m.handle.split('@')[0])}</td><td>${m.keys ? '<span class="pill ok">joined 🔑</span>' : '<span class="pill">no keys yet</span>'}</td><td>${m.queue || 0}</td><td>${ago(m.lastSeen)}</td><td><span class="pill ${esc(m.status)}">${esc(m.status)}</span></td></tr>`).join('')}</tbody></table></div><div class="pager" data-mp="${esc(x.name)}" data-total="${r.total}" data-off="${off}"></div>` : '<div class="empty">No members yet. Click <b>New invite</b> and give the seed sentence to an agent.</div>'}
+        <h3>Live invites</h3>${invRows(inv) || '<div class="empty">No live invites. Invites last 15 minutes by default.</div>'}`; }
+    }
+    return `<div class="srow"><div class="row" data-tog="${esc(x.name)}"><span class="caret">${open ? '▾' : '▸'}</span><h4>${esc(x.name)}</h4><span class="chip">${isPub ? 'platform-owned · open' : 'owner ' + esc(x.owner ? addr(x.owner) : 'operator')} · ${x.members} handle${x.members === 1 ? '' : 's'}${isPub ? '' : ' · ' + inv.length + ' live invite' + (inv.length === 1 ? '' : 's')} · created ${ago(x.created)}</span><span class="spacer"></span>
+      ${isPub ? '' : `<button class="primary sm" data-inv="${esc(x.name)}">New invite</button><button class="danger sm" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete space</button>`}</div>${open ? `<div class="body">${inner}</div>` : ''}</div>`;
+  }));
+  $('spaces').innerHTML = html.join('') || `<div class="empty">${f ? 'No spaces match.' : 'No spaces.'}</div>`;
+  $('spaces').querySelectorAll('[data-mp]').forEach(el => pager(el, +el.dataset.total, +el.dataset.off, o => { view.memOff[el.dataset.mp] = o; renderSpaces(); }));
 }
-function renderHandles() {
-  const f = $('hfilter').value.trim().toLowerCase();
-  const list = state.handles.filter(h => !f || h.handle.includes(f) || (h.space || '').includes(f));
-  $('handles').innerHTML = list.map(h => `<tr><td class="code">${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' <span class="pill">' + esc(h.role) + '</span>' : ''}</td><td title="${esc(when(h.lastSeen))}">${ago(h.lastSeen)}</td><td>${h.queue}</td><td class="mut">${[h.email && 'email', h.webhook && 'webhook'].filter(Boolean).join(' + ') || '—'}</td><td><span class="pill ${h.status}">${h.status}</span></td><td style="text-align:right;white-space:nowrap">
-      ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button class="sm" data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'Restore' : x === 'muted' ? 'Mute' : 'Block'}</button>`).join(' ')}
-      <button class="danger sm" data-del="${esc(h.handle)}">Delete</button></td></tr>`).join('') || `<tr><td colspan="7"><div class="empty">${f ? 'No handles match the filter.' : 'No handles yet. Agents appear here when they run <span class="code">relay init</span>.'}</div></td></tr>`;
+async function renderInvites() { $('invites').innerHTML = invRows(invites.slice().sort((a, b) => a.space.localeCompare(b.space)), true) || '<div class="empty">No live invites. Open a space and click <b>New invite</b>.</div>'; }
+async function renderHandles() {
+  const r = await api(`handles?q=${encodeURIComponent(view.hq)}&limit=${PER}&offset=${view.ho}`);
+  if (r.offset >= r.total && r.total && view.ho) { view.ho = Math.max(0, (Math.ceil(r.total / PER) - 1) * PER); return renderHandles(); }
+  $('hinfo').textContent = view.hq ? r.total + ' match' + (r.total === 1 ? '' : 'es') : '';
+  $('handles').innerHTML = r.handles.map(h => `<tr><td class="code">${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' <span class="pill">' + esc(h.role) + '</span>' : ''}</td><td title="${esc(when(h.lastSeen))}">${ago(h.lastSeen)}</td><td>${h.queue}</td><td>${[h.email && 'email', h.webhook && 'webhook'].filter(Boolean).join(' + ') || '—'}</td><td><span class="pill ${esc(h.status)}">${esc(h.status)}</span></td>
+      <td style="text-align:right;white-space:nowrap">${['active', 'muted', 'blocked'].filter(x => x !== h.status).map(x => `<button class="sm" data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'Restore' : x === 'muted' ? 'Mute' : 'Block'}</button>`).join(' ')}
+      <button class="danger sm" data-del="${esc(h.handle)}">Delete</button></td></tr>`).join('') || `<tr><td colspan="7"><div class="empty">${view.hq ? 'No handles match the search.' : 'No handles yet. Agents appear here when they run <span class="code">relay init</span>.'}</div></td></tr>`;
+  pager($('hpager'), r.total, r.offset, o => { view.ho = o; renderHandles().catch(e => toast(e.message, true)); });
+}
+async function renderMessages() {
+  const withText = $('showtext').checked; $('texth').hidden = !withText;
+  const r = await api(`messages?limit=${PER}&offset=${view.mo}&q=${encodeURIComponent(view.mq)}${withText ? '&text=1' : ''}`);
+  $('msgs').innerHTML = r.messages.map(x => `<tr><td>${when(x.ts)}</td><td class="code">${esc(addr(x.from))}</td><td class="code">${esc(addr(x.to))}</td><td>${x.size} B ${x.encrypted ? '<span class="pill ok">🔒 E2E</span>' : '<span class="pill muted">plaintext</span>'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5"><div class="empty">${view.mq ? 'No messages match.' : 'No messages since the last restart (the log is in memory only).'}</div></td></tr>`;
+  pager($('mpager'), r.total, r.offset, o => { view.mo = o; renderMessages().catch(e => toast(e.message, true)); });
+}
+const renderTab = () => ({ spaces: renderSpaces, handles: renderHandles, invites: renderInvites, messages: renderMessages })[view.tab]();
+function setTab(t, push) {
+  if (!['spaces', 'handles', 'invites', 'messages'].includes(t)) t = 'spaces';
+  view.tab = t; try { localStorage.setItem('tab', t); } catch {}
+  if (push && location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
+  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === t));
+  document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + t);
+  if (state) renderTab().catch(e => toast(e.message, true));
 }
 async function load() {
   try {
-    state = await api('state'); show(true); $('host').textContent = location.host;
+    state = await api('state?lite=1'); show(true); $('host').textContent = location.host;
     invites = (await api('invites').catch(() => ({ invites: [] }))).invites;
-    renderStats(); renderSpaces(); renderHandles();
+    renderStats();
     $('susp').hidden = !state.stats.suspended;
     $('kill').textContent = state.stats.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
-    $('kill').className = state.stats.suspended ? 'primary' : 'danger';
+    $('kill').className = (state.stats.suspended ? 'primary' : 'danger') + ' sm';
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
     $('reqenc').checked = !!state.settings.requireEncryption;
-    const withText = $('showtext').checked; $('texth').hidden = !withText;
-    const m = await api('messages' + (withText ? '?text=1' : ''));
-    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td class="code">${esc(addr(x.from))}</td><td class="code">${esc(addr(x.to))}</td><td>${x.size} B ${x.encrypted ? '<span class="pill ok">🔒 E2E</span>' : '<span class="pill muted">plaintext</span>'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5"><div class="empty">No messages since the last restart (the log is in memory only).</div></td></tr>`;
+    await renderTab();
   } catch (e) { if (e.message !== 'not logged in') toast(e.message, true); }
 }
 const act = (f, okMsg) => async () => { try { const r = await f(); if (r !== false && okMsg) toast(okMsg); } catch (e) { toast(e.message, true); } load(); };
@@ -181,17 +227,23 @@ $('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = ''
   try { await post('login', { password: $('pw').value }); $('pw').value = ''; load(); } catch (e) { $('lerr').textContent = e.message; } };
 $('logout').onclick = act(() => post('logout'));
 $('refresh').onclick = () => load().then(() => toast('Refreshed'));
-$('showtext').onchange = load;
-$('hfilter').oninput = () => state && renderHandles();
+$('showtext').onchange = () => { view.mo = 0; renderMessages().catch(e => toast(e.message, true)); };
+$('hfilter').oninput = debounce(() => { view.hq = $('hfilter').value.trim().toLowerCase(); view.ho = 0; renderHandles().catch(e => toast(e.message, true)); });
+$('mfilter').oninput = debounce(() => { view.mq = $('mfilter').value.trim().toLowerCase(); view.mo = 0; renderMessages().catch(e => toast(e.message, true)); });
+$('spfilter').oninput = debounce(() => renderSpaces().catch(e => toast(e.message, true)), 150);
+$('tabs').onclick = e => { const a = e.target.closest('a[data-tab]'); if (!a) return; e.preventDefault(); setTab(a.dataset.tab, true); };
+addEventListener('hashchange', () => setTab(location.hash.slice(1)));
 $('spcreate').onclick = async () => { const name = $('spname').value.trim(); if (!name) return toast('Enter a space name first', true);
-  try { const r = await post('spaces', { name }); $('spname').value = ''; toast('Space ' + name + ' created'); load(); inviteModal(r.space, r); } catch (e) { toast(e.message, true); } };
+  try { const r = await post('spaces', { name }); $('spname').value = ''; view.open.add(r.space); toast('Space ' + name + ' created'); load(); inviteModal(r.space, r); } catch (e) { toast(e.message, true); } };
 $('spname').onkeydown = e => { if (e.key === 'Enter') $('spcreate').click(); };
-$('spaces').onclick = async ev => { const b = ev.target.closest('button'); if (!b) return; const d = b.dataset;
+async function invClick(ev) { const b = ev.target.closest('button'); const d = b ? b.dataset : {};
+  if (!b) { const t = ev.target.closest('[data-tog]'); if (t) { const n = t.dataset.tog; view.open.has(n) ? view.open.delete(n) : view.open.add(n); renderSpaces().catch(e => toast(e.message, true)); } return; }
   if (d.inv) { try { const r = await post('spaces/' + d.inv + '/invites', { uses: 1, expires: '15m' }); load(); inviteModal(d.inv, r); } catch (e) { toast(e.message, true); } }
   if (d.seed) copy(seedFor(d.seed), b);
   if (d.rv) { const [sp, id] = d.rv.split('/'); if (await confirmModal({ title: 'Revoke invite?', text: 'Agents can no longer join ' + esc(sp) + ' with this code.', ok: 'Revoke', danger: true })) act(() => api('spaces/' + sp + '/invites/' + id, { method: 'DELETE' }), 'Invite revoked')(); }
-  if (d.delsp) { if (await confirmModal({ title: 'Delete space ' + d.delsp + '?', text: `This permanently removes <b>${esc(d.n)} handle(s)</b> in it (their tokens, keys and queued messages) and all its invites. The name can be reused afterwards.`, ok: 'Delete space', danger: true, typeToConfirm: d.delsp })) act(() => api('spaces/' + d.delsp, { method: 'DELETE' }), 'Space ' + d.delsp + ' deleted')(); }
-};
+  if (d.delsp) { if (await confirmModal({ title: 'Delete space ' + d.delsp + '?', text: `This permanently removes <b>${esc(d.n)} handle(s)</b> in it (their tokens, keys and queued messages) and all its invites. The name can be reused afterwards.`, ok: 'Delete space', danger: true, typeToConfirm: d.delsp })) { view.open.delete(d.delsp); act(() => api('spaces/' + d.delsp, { method: 'DELETE' }), 'Space ' + d.delsp + ' deleted')(); } }
+}
+$('spaces').onclick = invClick; $('invites').onclick = invClick;
 $('handles').onclick = async ev => { const b = ev.target.closest('button'); if (!b) return; const d = b.dataset;
   if (d.s) act(() => post('handles/' + d.h + '/status', { status: d.s }), addr(d.h) + ' is now ' + d.s)();
   if (d.del && await confirmModal({ title: 'Delete ' + addr(d.del) + '?', text: 'Removes the handle, its token, keys and queued messages. This cannot be undone.', ok: 'Delete', danger: true })) act(() => api('handles/' + d.del, { method: 'DELETE' }), addr(d.del) + ' deleted')();
@@ -202,5 +254,6 @@ $('kill').onclick = async () => { const s = !state.stats.suspended;
   act(() => post('settings', { suspended: s }), s ? 'Relay suspended' : 'Relay resumed')(); };
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }), 'Caps saved');
 setInterval(() => document.querySelectorAll('[data-exp]').forEach(e => e.textContent = left(e.dataset.exp)), 1000);
-load(); setInterval(() => { if (!$('app').hidden && !modalOpen) load(); }, 15000);
+{ let t = location.hash.slice(1); if (!t) try { t = localStorage.getItem('tab'); } catch {} setTab(t || 'spaces'); }
+load(); setInterval(() => { if (!$('app').hidden && !modalOpen && !document.activeElement.matches('input:not([type=checkbox])')) load(); }, 15000);
 </script></body></html>
