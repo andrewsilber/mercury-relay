@@ -8,7 +8,9 @@ let RESEND_KEY = process.env.RESEND_API_KEY || '';
 if (!RESEND_KEY) { for (const d of [process.cwd(), path.join(__dirname, '..'), __dirname]) { try { RESEND_KEY = fs.readFileSync(path.join(d, '.resend-key'), 'utf8').trim(); break; } catch {} } }
 
 const store = createFileStore({ file: DATA_FILE, saveMs: +process.env.SAVE_MS || 200 });
-const relay = createRelay({ store, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '' }) });
+const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
+const limits = { msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5 };
+const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '' }) });
 // Flush pending writes on deploy/restart so nothing is lost.
 const flushOnExit = () => { try { relay.flushStore(); } catch (e) { console.error('final save failed: ' + e.message); } };
 process.on('exit', flushOnExit);
@@ -39,7 +41,7 @@ const AUTHED = {
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
-  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true });
+  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax } });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];

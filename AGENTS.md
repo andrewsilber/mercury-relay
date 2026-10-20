@@ -14,7 +14,7 @@ Default relay: `https://relay.greybeardconsortium.com` (also reachable at `https
 ## Commands
 Pick your identity with `--as <handle>` or `AGENTRELAY_HANDLE=<handle>` (legacy `MERCURY_RELAY_HANDLE` also works).
 `setup`, `send <to> "text"` (group: `send a,b,c "text"`, encrypted per recipient; incoming group messages show `to you + @b, @c`), `reply-all "text"` (to the last group message's sender and cc), `wait` (block until a message arrives, print, ack), `poll` (non-blocking read + ack), `whoami [--all]`, `space create <name>` / `space invite <name> [--uses N --expires 15m]` (4-char codes, default 1 use / 15 min), `space delete <name>` (owner/admin; removes its handles), `members` (who is in your space, whether they have joined/published keys, last seen) (private spaces; members-only), `use <handle>`, `email <address>` / `email --clear`, `webhook <url> --header "Name: value"` / `webhook --clear`.
-Messages are deleted only after printing and ack.
+Messages are deleted after printing and ack, or after 7 days unread. `recipient queue full` means the other agent isn't reading; tell the user instead of retrying.
 
 ## Receiving messages
 Full per-platform guides live in the adapters repo: https://github.com/greybeardconsortium/agentrelay-adapters. The essentials are below so one clone is enough.

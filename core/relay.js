@@ -24,13 +24,17 @@ const DUR = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 };
 // Short invite codes: 4 chars, no 0/O/1/I/L; case-insensitive. 31^4 ~ 923k codes, so redemption is rate-limited.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const MAX_INVITE_MS = 24 * 3600e3;
-const FAIL_WINDOW = 10 * 60e3, FAIL_PER_IP = 5, FAIL_GLOBAL = 100;
+const FAIL_WINDOW = 10 * 60e3, FAIL_GLOBAL = 100;
+// '7d', '12h', '30m', '45s' or plain seconds -> ms
+const parseDur = (v, def) => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * (DUR[m[2]] || 1e3) : def; };
 const ok = body => ({ code: 200, body });
 const err = (code, error) => ({ code, body: { error } });
 const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
-function createRelay({ store, notifier }) {
+function createRelay({ store, notifier, limits = {} }) {
+  const L = { msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
   data.handles ||= {}; data.queues ||= {};
   data.settings ||= {}; const S = data.settings;
@@ -107,6 +111,13 @@ function createRelay({ store, notifier }) {
     waiters[h] = [];
     for (const x of w) { clearTimeout(x.timer); x.cb(200, { messages: q }); }
   }
+  function expire(h) { // drop queued messages older than MSG_TTL
+    const q = data.queues[h]; if (!q || !q.length) return;
+    const cut = Date.now() - L.msgTtlMs, n = q.length;
+    if (Date.parse(q[0].ts) >= cut) return;
+    data.queues[h] = q.filter(m => Date.parse(m.ts) >= cut); if (data.queues[h].length !== n) save();
+  }
+  setInterval(() => { for (const h of Object.keys(data.queues)) expire(h); }, Math.min(60e3, Math.max(1e3, L.msgTtlMs / 2))).unref();
   const seen = h => { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); seenDirty = true; } };
 
   const msgLog = [], sendTimes = {}, pairTimes = {};
@@ -138,7 +149,7 @@ function createRelay({ store, notifier }) {
   }
 
   const relay = {
-    data, waiters, msgLog, flush, save, flushStore, auth,
+    limits: L, data, waiters, msgLog, flush, save, flushStore, auth,
     register(m, { ip = '' } = {}) {
       const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
       const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);
@@ -192,7 +203,7 @@ function createRelay({ store, notifier }) {
       name = String(name || spaceOf(me)).toLowerCase();
       if (name === PUBLIC) return err(403, 'the public space has no member list');
       if (!data.spaces[name] || (spaceOf(me) !== name && data.spaces[name].owner !== me)) return err(403, 'only members of a space can list its members');
-      const list = Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, role: h.role || 'member', keys: !!h.keys, lastSeen: h.lastSeen || null }));
+      const list = Object.entries(data.handles).filter(([, h]) => h.space === name).map(([k, h]) => ({ handle: k, role: h.role || 'member', keys: !!h.keys, lastSeen: h.lastSeen || null, queued: (data.queues[k] || []).length }));
       return ok({ space: name, members: list.sort((a, b) => a.handle.localeCompare(b.handle)) });
     },
     listInvites() { // admin only: live invites
@@ -225,6 +236,7 @@ function createRelay({ store, notifier }) {
       if (enc && !validEnc(enc)) return err(400, 'invalid encrypted envelope');
       if (!enc && S.requireEncryption) return err(400, 'this relay requires end-to-end encryption; update the CLI (git pull) and retry');
       if (!data.handles[to]) return err(404, 'unknown recipient');
+      expire(to); if ((data.queues[to] || []).length >= L.queueMax) return err(429, 'recipient queue full (' + L.queueMax + ' unread messages); try again later');
       const deny = checkSend(me, to); if (deny) return deny;
       const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, ts: new Date().toISOString() };
       if (enc) msg.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; }
@@ -238,7 +250,7 @@ function createRelay({ store, notifier }) {
     },
     // Long-poll. cb(code, body) is called exactly once unless the returned cancel() runs first.
     poll(me, { handle, timeoutMs }, cb) {
-      seen(me);
+      seen(me); expire(me);
       if (handle && String(handle).toLowerCase().replace(/^@/, '').replace(/@public$/, '') !== me) { cb(403, { error: 'token does not match handle' }); return () => {}; }
       if (data.handles[me].status === 'blocked') { cb(403, { error: 'handle blocked by admin' }); return () => {}; }
       const q = S.suspended ? [] : (data.queues[me] || []);

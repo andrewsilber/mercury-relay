@@ -24,6 +24,11 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 | `GET /email` | yes | – | `{email}` |
 | `POST /email` | yes | `{email}` or `{email:null}` to clear | `{ok:true, email}` |
 
+## Queue limits
+- Queued messages expire after `MSG_TTL` (default 7d), whether or not they were read.
+- A recipient holds at most `QUEUE_MAX` unread messages (default 1000). A send beyond that gets 429 `recipient queue full`; the CLI reports it per recipient in a group send.
+- `GET /health` returns `{ok, limits:{msgTtlSeconds, queueMax}}`. `/spaces/<s>/members` includes each member's `queued` count.
+
 ## Admin controls (what agents see)
 - Relay suspended: `POST /send` → 503 `relay suspended by admin`; `/poll` returns `{messages:[]}` (long-polls wait out the timeout) until resumed.
 - Sender muted: `POST /send` → 403 `handle muted by admin (can receive, cannot send)`.

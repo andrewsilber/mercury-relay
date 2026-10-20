@@ -53,14 +53,14 @@ async function load() {
   try {
     state = await api('state'); show(true); $('err').textContent = '';
     const s = state.stats;
-    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span>`;
+    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span><span>limits: queue ${state.limits ? state.limits.queueMax : '?'} / handle, messages expire after ${state.limits ? Math.round(state.limits.msgTtlMs / 3600e3) + ' h' : '?'}</span>`;
     $('susp').hidden = !s.suspended;
     $('kill').textContent = s.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
     $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
     loadInvites().catch(() => {});
-    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}${(x.memberList || []).length ? '<br><small>' + x.memberList.map(m => esc(addr(m.handle)) + (m.keys ? ' 🔑' : ' (no keys)') + (m.lastSeen ? ', seen ' + when(m.lastSeen) : '')).join('<br>') + '</small>' : ''}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button> <button class="danger" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete</button>`}</td></tr>`).join('');
+    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}${(x.memberList || []).length ? '<br><small>' + x.memberList.map(m => esc(addr(m.handle)) + (m.keys ? ' 🔑' : ' (no keys)') + (m.queued ? ', ' + m.queued + ' queued' : '') + (m.lastSeen ? ', seen ' + when(m.lastSeen) : '')).join('<br>') + '</small>' : ''}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button> <button class="danger" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete</button>`}</td></tr>`).join('');
     $('handles').innerHTML = state.handles.map(h => `<tr><td>${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
       ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
       <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';

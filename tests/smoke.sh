@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; PORT=$((20000 + RANDOM % 20000)); URL="http://127.0.0.1:$PORT"
 export HOME="$TMP/home"; mkdir -p "$HOME"
 unset MERCURY_RELAY_CONFIG MERCURY_RELAY_HANDLE MERCURY_RELAY_URL AGENTRELAY_CONFIG AGENTRELAY_HANDLE AGENTRELAY_URL RESEND_API_KEY
-(cd "$TMP" && ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT DATA_FILE="$TMP/data.json" node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
-trap 'kill $SRV 2>/dev/null; rm -rf "$TMP"' EXIT
+(cd "$TMP" && INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT DATA_FILE="$TMP/data.json" node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
+trap 'kill $SRV $(jobs -p) 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; done
 # Wrapper logs all CLI output so we can check address formatting at the end.
 printf '#!/usr/bin/env bash\nnode "%s/relay.js" "$@" 2>&1 | tee -a "%s/cli-output.log"; exit ${PIPESTATUS[0]}\n' "$ROOT" "$TMP" > "$TMP/r.sh"; chmod +x "$TMP/r.sh"
@@ -70,7 +70,7 @@ C2="$($R --as smoke-a space invite acme --expires 1s | sed -n 's/^Invite code: \
 OUT="$($R init tres --invite "$C2" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || sfail "expired invite accepted: $OUT"
 OUT="$($R --as smoke-a space invite acme --expires 48h 2>&1 || true)"; echo "$OUT" | grep -q "24h" || sfail "expiry cap: $OUT"
 # brute-force lockout (separate client IP via X-Forwarded-For)
-for i in 1 2 3 4 5; do curl -s -H 'x-forwarded-for: 10.66.0.1' -d '{"handle":"brute","invite":"ZZZZ"}' "$URL/register" >/dev/null; done
+for i in $(seq 20); do curl -s -H 'x-forwarded-for: 10.66.0.1' -d '{"handle":"brute","invite":"ZZZZ"}' "$URL/register" >/dev/null; done
 OUT="$(curl -s -H 'x-forwarded-for: 10.66.0.1' -d "{\"handle\":\"brute\",\"invite\":\"$CODE\"}" "$URL/register")"; echo "$OUT" | grep -q "too many failed invite attempts" || sfail "no lockout: $OUT"
 curl -s -H 'x-forwarded-for: 6.6.6.6, 10.66.0.1' -d '{"handle":"brute2","invite":"ZZZZ"}' "$URL/register" | grep -q "too many failed" || sfail "lockout bypassed via spoofed leftmost XFF"
 $R init dana --url "$URL" >/dev/null || sfail "public dana (per-space uniqueness)"
@@ -83,11 +83,27 @@ $R --as smoke-a send dana "public dana" >/dev/null && $R --as dana poll | grep -
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/keys/dana@acme")" = 404 ] || sfail "private keys visible to outsiders"
 OUT="$($R --as bob@acme space invite acme 2>&1 || true)"; echo "$OUT" | grep -q "only the space owner" || sfail "member invite: $OUT"
 $R --as smoke-a space invite acme --uses 2 --expires 1d | grep -q "2 uses" || sfail "owner invite"
+$R --as dana@acme send bob "queued one" >/dev/null
+OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys published)  1 queued" || sfail "members queued count: $OUT"
+$R --as bob@acme poll >/dev/null
 OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys published)" && echo "$OUT" | grep -q "@dana" || sfail "members: $OUT"
 $R --as smoke-a members acme | grep -q "bob@acme" || sfail "owner members view"
 OUT="$($R --as dana members 2>&1 || true)"; echo "$OUT" | grep -q "no member list" || sfail "public members: $OUT"
 OUT="$($R --as smoke-g members acme 2>&1 || true)"; echo "$OUT" | grep -q "only members" || sfail "outsider members: $OUT"
 sleep 0.5; grep -qF "$SM" "$TMP/data.json" && sfail "space plaintext in data file"
+# queue limits: separate relay with short TTL and small cap
+QP=$((PORT + 2)); QU="http://127.0.0.1:$QP"
+(cd "$TMP" && MSG_TTL=2s QUEUE_MAX=3 PORT=$QP DATA_FILE="$TMP/q.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV3=$!
+for i in $(seq 50); do curl -sf "$QU/health" >/dev/null && break; sleep 0.1; done
+curl -s "$QU/health" | grep -q '"queueMax":3' && curl -s "$QU/health" | grep -q '"msgTtlSeconds":2' || { kill $SRV3; sfail "limits not in /health"; }
+$R init qqa --url "$QU" >/dev/null; $R init qqb --url "$QU" >/dev/null; $R init qqc --url "$QU" >/dev/null
+for i in 1 2 3; do $R --as qqa send qqb "m$i" >/dev/null || { kill $SRV3; sfail "send under cap"; }; done
+OUT="$($R --as qqa send qqb,qqc "over" 2>&1 || true)"
+echo "$OUT" | grep -q "FAILED to @qqb: recipient queue full" && echo "$OUT" | grep -q "sent to @qqc" || { kill $SRV3; sfail "queue cap / per-recipient report: $OUT"; }
+sleep 3
+OUT="$($R --as qqb poll)"; echo "$OUT" | grep -q "no new messages" || { kill $SRV3; sfail "messages did not expire: $OUT"; }
+kill $SRV3
+echo "PASS: queue cap (429 per recipient), message TTL expiry, limits in /health"
 # migration of an old (pre-spaces) data file
 MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"
 LH="$(node -e 'console.log(require("crypto").createHash("sha256").update("legacy-0123456789ab").digest("hex"))')"
