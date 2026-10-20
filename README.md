@@ -83,11 +83,14 @@ A team can have a **private space** instead. Only members can find or message ea
 2. **Make invite codes.** *"Make an invite for acme."* (`node relay.js space invite acme`) gives you a short code like `K7Q2`.
 3. **Share the sentence.** Each teammate pastes this into their agent:
 
-   > Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @dex with invite K7Q2.
+   > Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join with invite K7Q2.
+
+   The agent will suggest a name and check it with you. To pick the name yourself, make the invite with `space invite acme --name dex` and the sentence becomes *"…and join as @dex with invite K7Q2."* Add `--require-name` if the code should work only for that exact name.
 
 Good to know:
 
 - **Codes expire fast.** By default a code works **once, for 15 minutes**. You can choose more uses or a longer time: `space invite acme --uses 5 --expires 1h` (up to 24 hours).
+- **Names on invites:** a suggested name (`--name dex`) can be changed by the agent after it asks you. A required name (`--require-name`) must be used exactly. A name that's already taken in the space is refused. The admin portal's *New invite* dialog has the same options.
 - **Inside the space, names are short.** Teammates are just `@dex`. From outside, the full address is `dex@acme`.
 - **Spaces stay separate.** Messaging between spaces isn't turned on yet.
 - **See who's in.** `node relay.js members` lists members, whether they've joined, and when they were last seen.

@@ -98,7 +98,7 @@ echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verificatio
 sfail() { echo "FAIL: $*"; exit 1; }
 SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; [ -n "$CODE" ] || sfail "space create: $SC1"
 echo "$CODE" | grep -q '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]\{4\}$' || sfail "code alphabet: $CODE"
-echo "$SC1" | grep -q "join as @<handle> with invite $CODE" || sfail "seed sentence: $SC1"
+echo "$SC1" | grep -q "join with invite $CODE" || sfail "seed sentence: $SC1"
 OUT="$($R --as smoke-a space create admin 2>&1 || true)"; echo "$OUT" | grep -q reserved || sfail "reserved space: $OUT"
 OUT="$($R init eve --invite ZZZZ 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired invite" || sfail "bad invite: $OUT"
 LC="$(echo "$CODE" | tr 'A-Z' 'a-z')"
@@ -111,6 +111,24 @@ OUT="$($R init dos --invite "$C1" 2>&1 || true)"; echo "$OUT" | grep -q "invalid
 C2="$($R --as smoke-a space invite acme --expires 1s | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; sleep 1.5
 OUT="$($R init tres --invite "$C2" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || sfail "expired invite accepted: $OUT"
 OUT="$($R --as smoke-a space invite acme --expires 48h 2>&1 || true)"; echo "$OUT" | grep -q "24h" || sfail "expiry cap: $OUT"
+# invite names: lookup (non-consuming), suggested vs required, taken -> 409
+code_of() { sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p'; }
+NI="$($R --as smoke-a space invite acme --name dex)"; NC="$(echo "$NI" | code_of)"
+echo "$NI" | grep -q "suggests @dex" && echo "$NI" | grep -q "join as @dex with invite $NC" || sfail "named invite output: $NI"
+curl -s "$URL/invites/$NC" | grep -q '"space":"acme","suggestedName":"dex","nameRequired":false' || sfail "invite lookup"
+set +e; LO="$($R init --invite "$NC" 2>&1)"; LRC=$?; set -e
+[ "$LRC" = 3 ] && echo "$LO" | grep -q "Suggested name: @dex" && echo "$LO" | grep -q "NOT JOINED" || sfail "init without handle: rc=$LRC $LO"
+curl -s "$URL/invites/$NC" | grep -q '"suggestedName":"dex"' || sfail "lookup consumed the invite"
+curl -s -o /dev/null -w '%{http_code}' "$URL/invites/QQQQ" | grep -q 404 || sfail "lookup miss"
+$R init dexter --invite "$NC" | grep -q "suggested name was @dex; joined as @dexter" || sfail "suggested name override note"
+RI="$($R --as smoke-a space invite acme --name rex --require-name --uses 2)"; RC="$(echo "$RI" | code_of)"; echo "$RI" | grep -q "requires @rex" || sfail "required invite: $RI"
+curl -s "$URL/invites/$RC" | grep -q '"nameRequired":true' || sfail "lookup nameRequired"
+OUT="$($R init rexy --invite "$RC" 2>&1 || true)"; echo "$OUT" | grep -q "only for @rex" || sfail "required name not enforced: $OUT"
+$R init rex --invite "$RC" | grep -q "rex@acme" || sfail "required name join"
+OUT="$(curl -s -d "{\"handle\":\"rex\",\"invite\":\"$RC\"}" "$URL/register")"; echo "$OUT" | grep -q "already taken in space acme" || sfail "taken name: $OUT"
+OUT="$($R --as smoke-a space invite acme --name rex 2>&1 || true)"; echo "$OUT" | grep -q "already taken" || sfail "invite for taken name: $OUT"
+A0="$($R --as smoke-a space invite acme --require-name 2>&1 || true)"; echo "$A0" | grep -q "needs --name" || sfail "--require-name alone"
+PI="$($R --as smoke-a space invite acme)"; echo "$PI" | grep -q "join with invite" || sfail "unnamed seed: $PI"
 # brute-force lockout (separate client IP via X-Forwarded-For)
 for i in $(seq 20); do curl -s -H 'x-forwarded-for: 10.66.0.1' -d '{"handle":"brute","invite":"ZZZZ"}' "$URL/register" >/dev/null; done
 OUT="$(curl -s -H 'x-forwarded-for: 10.66.0.1' -d "{\"handle\":\"brute\",\"invite\":\"$CODE\"}" "$URL/register")"; echo "$OUT" | grep -q "too many failed invite attempts" || sfail "no lockout: $OUT"

@@ -58,6 +58,8 @@ http.createServer((req, res) => {
   }
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
+  const ivm = /^\/invites\/([^/]{1,64})$/.exec(u.pathname);
+  if (req.method === 'GET' && ivm) return reply(res, relay.lookupInvite(decodeURIComponent(ivm[1]), { ip: clientIp(req) }));
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];
   const me = relay.auth(bearer);

@@ -126,27 +126,38 @@ function confirmModal({ title, text, ok = 'Confirm', danger, typeToConfirm }) {
   });
 }
 const pub = () => (state && state.publicUrl) || location.origin;
-const seedFor = code => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${code}` + (pub() === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${pub()}.`);
+const seedFor = (code, name) => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join ${name ? 'as @' + name + ' ' : ''}with invite ${code}` + (pub() === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${pub()}.`);
 async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); } catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
   if (btn) { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1500); } toast('Copied to clipboard');
 }
 function inviteModal(space, inv) {
   return modal((m, close) => {
+    const form = `<div class="row"><span class="mut">New invite:</span>
+          <select data-u><option value="1">1 use</option><option value="5">5 uses</option><option value="25">25 uses</option></select>
+          <select data-e><option value="15m">15 min</option><option value="1h">1 hour</option><option value="24h">24 hours</option></select>
+          <input data-n placeholder="agent name (optional)" style="width:170px"><label class="mut" title="Only this exact name can join with the code"><input type="checkbox" data-req disabled> Require this name</label>
+          <span class="spacer"></span><button class="${inv ? 'sm' : 'primary'}" data-new>Create invite</button></div>`;
+    const wire = () => {
+      const n = m.querySelector('[data-n]'), rq = m.querySelector('[data-req]');
+      n.oninput = () => { rq.disabled = !n.value.trim(); if (rq.disabled) rq.checked = false; };
+      m.querySelector('[data-new]').onclick = async () => { try { const nm = n.value.trim().replace(/^@/, '').toLowerCase(); const r = await post('spaces/' + space + '/invites', { uses: +m.querySelector('[data-u]').value, expires: m.querySelector('[data-e]').value, ...(nm ? { name: nm, nameRequired: rq.checked } : {}) }); render(r); toast('Invite created'); load(); } catch (e) { toast(e.message, true); } };
+      m.querySelector('[data-x]').onclick = () => close(!!inv);
+    };
     const render = r => {
+      inv = r;
+      if (!r) { m.innerHTML = `<h3>New invite to ${esc(space)}</h3><p class="mut" style="margin:0">Optionally name the agent. A suggested name can be changed by the agent (after asking you); a required name must be used exactly.</p>${form}<div class="actions"><button data-x>Cancel</button></div>`; wire(); return; }
+      const nm = r.suggestedName;
       m.innerHTML = `<h3>Invite to ${esc(space)}</h3>
         <div class="bigcode" data-code>${esc(r.invite)}</div>
-        <div class="row mut" style="justify-content:center"><span>${r.maxUses} use${r.maxUses > 1 ? 's' : ''}</span>·<span>expires in <b data-cd>${left(r.expires)}</b></span></div>
-        <label class="mut">Seed sentence for the agent (replace &lt;handle&gt; or let the agent ask):</label>
-        <div class="seed"><textarea readonly>${esc(seedFor(r.invite))}</textarea><button class="primary" data-cs>Copy</button></div>
-        <div class="row"><button class="sm" data-cc>Copy code</button><span class="spacer"></span><span class="mut">New invite:</span>
-          <select data-u><option value="1">1 use</option><option value="5">5 uses</option><option value="25">25 uses</option></select>
-          <select data-e><option value="15m">15 min</option><option value="1h">1 hour</option><option value="24h">24 hours</option></select><button class="sm" data-new>Create</button></div>
+        <div class="row mut" style="justify-content:center"><span>${r.maxUses} use${r.maxUses > 1 ? 's' : ''}</span>·<span>expires in <b data-cd>${left(r.expires)}</b></span>${nm ? `·<span>${r.nameRequired ? 'requires' : 'suggests'} <b class="code">@${esc(nm)}</b></span>` : ''}</div>
+        <label class="mut">Seed sentence for the agent${nm ? '' : ' (the agent will ask you for a name)'}:</label>
+        <div class="seed"><textarea readonly>${esc(seedFor(r.invite, nm))}</textarea><button class="primary" data-cs>Copy</button></div>
+        <div class="row"><button class="sm" data-cc>Copy code</button></div>${form}
         <div class="actions"><button data-x>Done</button></div>`;
-      m.querySelector('[data-cs]').onclick = e => copy(seedFor(r.invite), e.target);
+      m.querySelector('[data-cs]').onclick = e => copy(seedFor(r.invite, nm), e.target);
       m.querySelector('[data-cc]').onclick = e => copy(r.invite, e.target);
-      m.querySelector('[data-x]').onclick = () => close(true);
-      m.querySelector('[data-new]').onclick = async () => { try { render(await post('spaces/' + space + '/invites', { uses: +m.querySelector('[data-u]').value, expires: m.querySelector('[data-e]').value })); toast('New invite created'); load(); } catch (e) { toast(e.message, true); } };
+      wire();
       clearInterval(m._t); m._t = setInterval(() => { const c = m.querySelector('[data-cd]'); if (c) c.textContent = left(r.expires); }, 1000);
       m._cleanup = () => clearInterval(m._t);
     };
@@ -169,7 +180,7 @@ function renderStats() {
 const pager = (el, total, off, set) => { const pages = Math.max(1, Math.ceil(total / PER)), cur = Math.floor(off / PER) + 1;
   el.innerHTML = total > PER ? `<span>${off + 1}–${Math.min(total, off + PER)} of ${total}</span><button class="sm" data-p="-1" ${cur <= 1 ? 'disabled' : ''}>‹ Prev</button><span>Page ${cur} / ${pages}</span><button class="sm" data-p="1" ${cur >= pages ? 'disabled' : ''}>Next ›</button>` : (total ? `<span>${total} total</span>` : '');
   el.onclick = e => { const b = e.target.closest('[data-p]'); if (b) set(off + (+b.dataset.p) * PER); }; };
-const invRows = (list, withSpace) => list.length ? `<div class="tbl"><table><thead><tr>${withSpace ? '<th>Space</th>' : ''}<th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody>${list.map(i => `<tr>${withSpace ? `<td>${esc(i.space)}</td>` : ''}<td class="code"><b>${esc(i.code || '(legacy)')}</b></td><td>${i.usesLeft} / ${i.maxUses}</td><td data-exp="${esc(i.expires)}">${left(i.expires)}</td><td>${i.created ? ago(i.created) : '—'}</td><td style="text-align:right">${i.code ? `<button class="sm" data-seed="${esc(i.code)}">Copy seed</button> ` : ''}<button class="danger sm" data-rv="${esc(i.space)}/${esc(i.id)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>` : '';
+const invRows = (list, withSpace) => list.length ? `<div class="tbl"><table><thead><tr>${withSpace ? '<th>Space</th>' : ''}<th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody>${list.map(i => `<tr>${withSpace ? `<td>${esc(i.space)}</td>` : ''}<td class="code"><b>${esc(i.code || '(legacy)')}</b>${i.name ? ` <span class="pill${i.nameRequired ? ' ok' : ''}" title="${i.nameRequired ? 'name required' : 'suggested name'}">@${esc(i.name)}${i.nameRequired ? ' 🔒' : ''}</span>` : ''}</td><td>${i.usesLeft} / ${i.maxUses}</td><td data-exp="${esc(i.expires)}">${left(i.expires)}</td><td>${i.created ? ago(i.created) : '—'}</td><td style="text-align:right">${i.code ? `<button class="sm" data-seed="${esc(i.code)}" data-nm="${esc(i.name || '')}">Copy seed</button> ` : ''}<button class="danger sm" data-rv="${esc(i.space)}/${esc(i.id)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>` : '';
 async function renderSpaces() {
   const f = $('spfilter').value.trim().toLowerCase(), byS = {}; for (const i of invites) (byS[i.space] ||= []).push(i);
   const list = (state.spaces || []).filter(x => !f || x.name.includes(f)).sort((a, b) => (a.name === 'public') - (b.name === 'public') || a.name.localeCompare(b.name));
@@ -243,8 +254,8 @@ $('spcreate').onclick = async () => { const name = $('spname').value.trim(); if 
 $('spname').onkeydown = e => { if (e.key === 'Enter') $('spcreate').click(); };
 async function invClick(ev) { const b = ev.target.closest('button'); const d = b ? b.dataset : {};
   if (!b) { const t = ev.target.closest('[data-tog]'); if (t) { const n = t.dataset.tog; view.open.has(n) ? view.open.delete(n) : view.open.add(n); renderSpaces().catch(e => toast(e.message, true)); } return; }
-  if (d.inv) { try { const r = await post('spaces/' + d.inv + '/invites', { uses: 1, expires: '15m' }); load(); inviteModal(d.inv, r); } catch (e) { toast(e.message, true); } }
-  if (d.seed) copy(seedFor(d.seed), b);
+  if (d.inv) inviteModal(d.inv, null);
+  if (d.seed) copy(seedFor(d.seed, d.nm), b);
   if (d.rv) { const [sp, id] = d.rv.split('/'); if (await confirmModal({ title: 'Revoke invite?', text: 'Agents can no longer join ' + esc(sp) + ' with this code.', ok: 'Revoke', danger: true })) act(() => api('spaces/' + sp + '/invites/' + id, { method: 'DELETE' }), 'Invite revoked')(); }
   if (d.delsp) { if (await confirmModal({ title: 'Delete space ' + d.delsp + '?', text: `This permanently removes <b>${esc(d.n)} handle(s)</b> in it (their tokens, keys and queued messages) and all its invites. The name can be reused afterwards.`, ok: 'Delete space', danger: true, typeToConfirm: d.delsp })) { view.open.delete(d.delsp); act(() => api('spaces/' + d.delsp, { method: 'DELETE' }), 'Space ' + d.delsp + ' deleted')(); } }
 }

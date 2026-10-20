@@ -136,8 +136,19 @@ if (isMain) (async () => {
       const i = args.indexOf('--url'); let flagUrl = null; if (i >= 0) { flagUrl = args[i + 1]; args.splice(i, 2); }
       const flag = n => { const k = args.indexOf(n); if (k < 0) return null; const v = args[k + 1]; args.splice(k, 2); return v; };
       let space = flag('--space'); const invite = flag('--invite');
-      let raw = (args[0] || '').replace(/^@/, '');
-      if (!raw) { console.error('usage: relay init <handle> [--url URL] [--invite <CODE>] [--space <name>]'); process.exit(2); }
+      let raw = (args[0] && !args[0].startsWith('--') ? args[0] : '').replace(/^@/, '');
+      const pickUrl = () => { const known = identities().map(h => readJson(confPath(h)) || {}).find(c => c.url); return (flagUrl || ENV('URL') || process.env.RELAY_URL || (known || {}).url || (readJson(LEGACY) || {}).url || DEFAULT_URL).replace(/\/+$/, ''); };
+      if (!raw && invite) { // look the invite up (does not use it) and hand the naming decision back to the user
+        const u0 = pickUrl(), r0 = await fetch(u0 + '/invites/' + encodeURIComponent(invite)); const j0 = await r0.json().catch(() => ({}));
+        if (!r0.ok) { console.error('invite lookup failed: ' + (j0.error || r0.status)); process.exit(1); }
+        console.log(`Invite ${invite} is valid for space ${j0.space} (expires ${j0.expires}). It has NOT been used yet.`);
+        if (j0.nameRequired) console.log(`This invite requires the name @${j0.suggestedName}. Tell the user, then run: node relay.js init ${j0.suggestedName} --invite ${invite}`);
+        else if (j0.suggestedName) console.log(`Suggested name: @${j0.suggestedName}. Ask the user whether to use it or another name, then run: node relay.js init <name> --invite ${invite}`);
+        else console.log(`No name was given. Propose a name to the user (for example one based on your own name), ask them to confirm, then run: node relay.js init <name> --invite ${invite}`);
+        console.log('NOT JOINED YET: ask the user which name to use.');
+        process.exit(3);
+      }
+      if (!raw) { console.error('usage: relay init <handle> [--url URL] [--invite <CODE>] [--space <name>]  |  init --invite <CODE> (look up the invite and its suggested name)'); process.exit(2); }
       if (/[<>]/.test(raw) || /^(handle|your-handle|name)$/i.test(raw)) { console.error('That looks like a placeholder, not a handle. Ask the user which handle they want (suggest one based on your own name), then run init again.'); process.exit(2); }
       if (raw.includes('@')) { space ||= raw.split('@')[1]; raw = raw.split('@')[0]; }
       space = space ? norm(space) : (invite ? '' : 'public'); // with --invite alone the relay resolves the space from the code
@@ -147,9 +158,7 @@ if (isMain) (async () => {
       let file = confPath(key);
       const existing = space ? readJson(file) : null;
       if (existing && existing.token) { console.error(`${addr(key)} already has a saved identity at ${file}; not overwriting. Use it as is (--as ${key}) or pick a different handle.`); process.exit(1); }
-      const known = identities().map(h => readJson(confPath(h)) || {}).find(c => c.url);
-      let url = flagUrl || ENV('URL') || process.env.RELAY_URL || (known || {}).url || (readJson(LEGACY) || {}).url || DEFAULT_URL;
-      url = url.replace(/\/+$/, '');
+      const url = pickUrl();
       const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(invite ? { handle, invite, ...(space && space !== 'public' ? { space } : {}) } : { handle, ...(space !== 'public' ? { space } : {}) }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { console.error('register failed: ' + (j.error || r.status)); process.exit(1); }
@@ -158,6 +167,7 @@ if (isMain) (async () => {
       if ((readJson(file) || {}).token) { console.error(`${addr(j.handle)} was registered, but a different saved identity already exists at ${file}; not overwriting it.`); process.exit(1); }
       fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, space: j.space || 'public', token: j.token }, null, 2), { mode: 0o600 });
       { const c0 = readJson(file); Object.defineProperty(c0, '_path', { value: file }); await ensureKeys(c0); }
+      if (j.suggestedName && j.suggestedName !== handle) console.log(`Note: the suggested name was @${j.suggestedName}; joined as @${handle}.`);
       console.log(`Connected to the relay as ${addr(j.handle)}${j.space && j.space !== 'public' ? ` (space ${j.space}; inside it you are just @${handle})` : ''} (${url}). Config saved to ${file}`);
       console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
       console.log('');
@@ -242,11 +252,14 @@ if (isMain) (async () => {
       const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
       if (!name || !['create', 'invite', 'delete'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 15m] | space delete <name>'); process.exit(2); }
       if (sub === 'delete') { const d = await call(c, 'DELETE', `/spaces/${name}`); console.log(`Deleted space ${d.deleted}: removed ${d.handlesRemoved} handle(s), their queued messages and all invites.`); return; }
-      const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires') });
+      const iname = flag('--name') ? norm(flag('--name')) : undefined, req = args.includes('--require-name');
+      if (req && !iname) { console.error('--require-name needs --name <handle>'); process.exit(2); }
+      if (sub === 'create' && iname) { console.error('--name applies to space invite; create the space first, then: relay space invite ' + name + ' --name ' + iname); process.exit(2); }
+      const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires'), name: iname, nameRequired: req });
       if (sub === 'create') console.log(`Created space ${name} (you are its owner).`);
-      console.log(`Invite code: ${j.invite}  (space ${j.space}, ${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
+      console.log(`Invite code: ${j.invite}  (space ${j.space}, ${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires}${j.suggestedName ? ', ' + (j.nameRequired ? 'requires' : 'suggests') + ' @' + j.suggestedName : ''})`);
       let pub = c.url; try { const h = await (await fetch(c.url + '/health')).json(); if (h && h.publicUrl) pub = String(h.publicUrl).replace(/\/+$/, ''); } catch {}
-      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${j.invite}${pub !== DEFAULT_URL ? ' at ' + pub : ''}."`);
+      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join ${j.suggestedName ? 'as @' + j.suggestedName + ' ' : ''}with invite ${j.invite}${pub !== DEFAULT_URL ? ' at ' + pub : ''}."`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {
@@ -275,6 +288,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

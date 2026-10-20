@@ -8,13 +8,14 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 |---|---|---|---|
 | `GET /health` | no | – | `{ok:true}` |
 | `POST /register` | no | `{handle}` | `{handle, token}`; 409 if taken. The token is shown once; the relay stores only its SHA-256. |
-| `POST /register` (spaces) | no | `{handle, invite?, space?}` — the invite code alone identifies the space | `{handle, space, role, token}`. `handle` is the address (`dana` in public, `dana@acme` in a private space). Private spaces need a valid invite (403 otherwise). Reserved handles: admin, relay, system, support. |
+| `POST /register` (spaces) | no | `{handle, invite?, space?}` — the invite code alone identifies the space | `{handle, space, role, token}`. `handle` is the address (`dana` in public, `dana@acme` in a private space). Private spaces need a valid invite (403 otherwise). If the invite carries a name: `nameRequired` invites return 403 for any other handle; suggested names may be overridden, and the response then includes `suggestedName`. A handle already taken in the space returns 409. Space invites accept `{uses, expires, name?, nameRequired?}`. Reserved handles: admin, relay, system, support. |
 | `POST /spaces` | yes | `{name, uses?, expires?}` | `{space, invite, maxUses, expires}`; the caller becomes owner. Reserved: public, admin, api, relay, system, support, www, gbc. Returns a first invite (default 5 uses, 15m). |
 | `POST /spaces/<name>/invites` | yes (owner or space admin) | `{uses?, expires?, role?}` | `{space, invite, maxUses, expires}`; defaults 1 use, 15m (max 24h, 1000 uses); role member, agent or admin. |
 | `GET /spaces/<name>/members` | yes (member or owner) | | `{space, members:[{handle, role, keys, lastSeen}]}`; 403 for public or non-members. |
 | `DELETE /spaces/<name>` | yes (owner or space admin) | | `{ok, deleted, handlesRemoved}`. Removes the space, its invites and every handle in it (tokens, keys, queues); the name can be reused. Admin: `DELETE /admin/api/spaces/<name>`. |
 | `POST /keys` | yes | `{x25519, ed25519}` (base64 SPKI DER public keys) | `{ok:true}`. Publishes/replaces the handle's public keys. |
 | `GET /keys/<address>` | optional | | `{handle, x25519, ed25519, updated}`; 404 if none. Keys of a private-space handle are returned only to members of that space (others get 404). |
+| `GET /invites/<code>` | no | | `{space, suggestedName, nameRequired, expires}` without using the invite. Rate-limited (30/min per IP); a miss returns 404 and counts toward the invite-failure lockout. |
 | `POST /send` | yes | `{to, enc}` (preferred) or `{to, text}` (legacy plaintext; 400 if the relay requires encryption) | `{ok:true, id}`; 404 unknown recipient. Queues the message, wakes long-pollers, fires webhook and email wake-ups. |
 | `GET /poll` | yes | `?handle=<me>&timeout=<0..120 s, default 30>` | `{messages:[{id, from, to, ts, enc} | {id, from, to, ts, text, plaintext:true}]}`. Returns at once if messages are queued or timeout=0; otherwise long-polls. 403 if `handle` isn't the token's. Messages stay queued until acked. |
 | `POST /ack` | yes | `{ids:[...]}` | `{ok:true, deleted:n}` |

@@ -60,7 +60,12 @@ function createRelay({ store, notifier, limits = {} }) {
     return null;
   }
   function pruneInvites() { for (const sp of Object.values(data.spaces)) for (const [h, inv] of Object.entries(sp.invites || {})) if (!live(inv)) delete sp.invites[h]; }
-  function newInvite(sp, by, { uses, expires, role } = {}, defUses = 1) {
+  function newInvite(sp, by, { uses, expires, role, name, nameRequired } = {}, defUses = 1) {
+    name = name == null || name === '' ? null : String(name).trim().toLowerCase().replace(/^@/, '');
+    if (name && !HANDLE_RE.test(name)) return err(400, 'invite name must be a valid handle: 3-32 chars of a-z, 0-9, _ or -');
+    if (name && RESERVED_HANDLES.has(name)) return err(400, 'handle @' + name + ' is reserved');
+    if (nameRequired && !name) return err(400, 'nameRequired needs a name');
+    if (name && data.handles[keyOf(name, sp)]) return err(409, `@${name} is already taken in space ${sp}`);
     const ms = /^(\d+)([smhd])$/.exec(String(expires || '15m')); if (!ms) return err(400, 'expires must look like 30s, 15m, 12h or 1d');
     const ttl = +ms[1] * DUR[ms[2]]; if (!(ttl >= 1e3 && ttl <= MAX_INVITE_MS)) return err(400, 'expires must be between 1s and 24h');
     const maxUses = Math.floor(+uses || defUses); if (!(maxUses >= 1 && maxUses <= 1000)) return err(400, 'uses must be 1-1000');
@@ -70,12 +75,12 @@ function createRelay({ store, notifier, limits = {} }) {
     for (let i = 0; i < 50; i++) { code = Array.from(crypto.randomBytes(4), b => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(''); if (!findInvite(code)) break; code = null; } // unique among live invites
     if (!code) return err(503, 'could not allocate an invite code, try again');
     const exp = new Date(Date.now() + ttl).toISOString();
-    (data.spaces[sp].invites ||= {})[codeHashes(code)[0]] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString(), code }; // plaintext kept for the admin list only (short-lived, admin-only)
+    (data.spaces[sp].invites ||= {})[codeHashes(code)[0]] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString(), code, ...(name ? { name, nameRequired: !!nameRequired } : {}) }; // plaintext kept for the admin list only (short-lived, admin-only)
     save();
-    return ok({ space: sp, invite: code, maxUses, expires: exp });
+    return ok({ space: sp, invite: code, maxUses, expires: exp, suggestedName: name, nameRequired: !!(name && nameRequired) });
   }
   // Brute-force protection for invite redemption: per-IP and global failure windows.
-  const fails = new Map(); let globalFails = [];
+  const fails = new Map(), lookups = new Map(); let globalFails = [];
   function inviteLocked(ip) {
     const now = Date.now(); globalFails = globalFails.filter(t => t > now - FAIL_WINDOW);
     const f = (fails.get(ip) || []).filter(t => t > now - FAIL_WINDOW); fails.set(ip, f);
@@ -195,17 +200,18 @@ function createRelay({ store, notifier, limits = {} }) {
         const f = m.invite && findInvite(m.invite, space && space !== PUBLIC ? space : null); // the code alone identifies the space
         if (!f || f.space === PUBLIC) { inviteFailed(ip); return err(403, 'invalid or expired invite code (ask the space owner for a new one)'); }
         space = f.space; inv = f.inv; role = inv.role;
+        if (inv.nameRequired && inv.name && handle !== inv.name) return err(403, `this invite is only for @${inv.name}; join as @${inv.name} (ask the user before using a different name)`);
       }
       space ||= PUBLIC;
       const key = keyOf(handle, space);
-      if (data.handles[key]) return err(409, 'handle taken');
+      if (data.handles[key]) return err(409, space === PUBLIC ? 'handle taken' : `@${handle} is already taken in space ${space}; ask the user for another name`);
       if (inv) inv.uses++;
       const token = crypto.randomBytes(32).toString('hex');
       data.handles[key] = { tokenHash: sha(token), created: new Date().toISOString(), space, role };
       data.queues[key] = [];
       tokenIndex.set(data.handles[key].tokenHash, key); indexedCount++;
       save();
-      return ok({ handle: key, space, role, token });
+      return ok({ handle: key, space, role, token, ...(inv && inv.name ? { suggestedName: inv.name, nameRequired: !!inv.nameRequired } : {}) });
     },
     createSpace(me, m) {
       const name = String(m.name || '').trim().toLowerCase();
@@ -241,12 +247,20 @@ function createRelay({ store, notifier, limits = {} }) {
     },
     listInvites() { // admin only: live invites
       pruneInvites(); const out = [];
-      for (const [space, sp] of Object.entries(data.spaces)) for (const [id, inv] of Object.entries(sp.invites || {})) out.push({ id: id.slice(0, 16), space, code: inv.code || null, usesLeft: inv.maxUses - inv.uses, maxUses: inv.maxUses, expires: inv.expires, created: inv.created || null, role: inv.role, by: inv.by || null });
+      for (const [space, sp] of Object.entries(data.spaces)) for (const [id, inv] of Object.entries(sp.invites || {})) out.push({ id: id.slice(0, 16), space, code: inv.code || null, usesLeft: inv.maxUses - inv.uses, maxUses: inv.maxUses, expires: inv.expires, created: inv.created || null, role: inv.role, by: inv.by || null, name: inv.name || null, nameRequired: !!inv.nameRequired });
       return out.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
     },
     revokeInvite(space, id) {
       const sp = data.spaces[space]; const k = sp && Object.keys(sp.invites || {}).find(h => h.slice(0, 16) === id);
       if (!k) return err(404, 'unknown invite'); delete sp.invites[k]; save(); return ok({ ok: true, revoked: id });
+    },
+    lookupInvite(code, { ip = '' } = {}) { // public, non-consuming; misses count toward the invite-failure lockout
+      const now = Date.now(), w = (lookups.get(ip) || []).filter(t => t > now - 60e3);
+      if (w.length >= 30) return err(429, 'too many invite lookups; try again in a minute'); w.push(now); lookups.set(ip, w); if (lookups.size > 10000) lookups.clear();
+      const lock = inviteLocked(ip); if (lock) return lock;
+      const f = findInvite(code);
+      if (!f || f.space === PUBLIC) { inviteFailed(ip); return err(404, 'invalid or expired invite code (ask the space owner for a new one)'); }
+      return ok({ space: f.space, suggestedName: f.inv.name || null, nameRequired: !!(f.inv.name && f.inv.nameRequired), expires: f.inv.expires });
     },
     findInviteSpace(code) { const f = findInvite(code); return f ? f.space : null; },
     createSpaceAsOperator(m) { const r = relay.createSpace('operator', m); if (r.code === 200) data.spaces[r.body.space].owner = null; return r; },
