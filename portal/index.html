@@ -70,7 +70,7 @@ thead th{position:sticky;top:0;background:var(--card);z-index:1}
 <div class="top">
 <div class="stats" id="stats"></div><div class="mut" id="puburl" style="font-size:13px"></div>
 <section class="card controls"><div class="row"><b>Controls</b><button id="kill" class="danger sm"></button><label><input type="checkbox" id="reqenc"> Require E2E</label><span class="spacer"></span>
-<label>Max msgs/pair/hour <input type="number" min="0" id="pair"></label><label>Sends/handle/min <input type="number" min="0" id="rate"></label><button id="savecaps" class="sm">Save caps</button><span class="mut">0 = off</span></div></section>
+<label>Max msgs/pair/hour <input type="number" min="0" id="pair"></label><label>Sends/handle/min <input type="number" min="0" id="rate"></label><button id="savecaps" class="sm">Save caps</button><span class="mut">0 = off</span><button id="export" class="sm" title="Download a full JSON backup">Export backup</button></div></section>
 <nav class="tabs" id="tabs"><a href="#spaces" data-tab="spaces">Spaces<span class="n" id="n-spaces"></span></a><a href="#handles" data-tab="handles">Handles<span class="n" id="n-handles"></span></a><a href="#invites" data-tab="invites">Invites<span class="n" id="n-invites"></span></a><a href="#messages" data-tab="messages">Messages<span class="n" id="n-messages"></span></a></nav>
 </div>
 <div class="pane" id="pane-spaces"><section class="card"><div class="toolbar"><input id="spfilter" placeholder="Filter spaces…"><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
@@ -157,7 +157,8 @@ function inviteModal(space, inv) {
 const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : n >= 1e3 ? (n / 1e3).toFixed(1) + ' KB' : (n || 0) + ' B';
 const storageCard = () => { const st = state.storage; if (!st) return '<div class="stat"><b>…</b><small>storage</small></div>';
   const name = st.backend === 'postgres' ? 'Postgres' : st.backend === 'json-file' ? 'JSON file' : esc(st.backend);
-  return `<div class="stat" title="${st.backend === 'postgres' ? 'schema ' + esc(st.schema) + ' · single instance' : 'data file'}${st.messageLog ? ' · admin log ' + st.messageLog.entries + '/' + st.messageLog.max : ''}${st.lastError ? ' · last error: ' + esc(st.lastError) : ''}"><b>${fmtBytes(st.bytes)}</b><small>storage · ${name}${st.lastError ? ' · <span style="color:var(--red)">write error</span>' : ''}</small></div>`; };
+  const b = st.backup, bsub = b && b.enabled ? (b.lastError ? '<span style="color:var(--red)">backup failed</span>' : b.last ? 'backup ' + ago(b.last.at) : 'no backup yet') : (st.backend === 'postgres' ? 'provider backups' : 'auto-backup off');
+  return `<div class="stat" title="${st.backend === 'postgres' ? 'schema ' + esc(st.schema) + ' · single instance' : 'data file'}${st.messageLog ? ' · admin log ' + st.messageLog.entries + '/' + st.messageLog.max : ''}${st.lastError ? ' · last error: ' + esc(st.lastError) : ''}${b && b.last ? ' · last backup ' + esc(when(b.last.at)) + ' (' + fmtBytes(b.last.bytes) + ', keeping ' + b.keep + ')' : ''}${b && b.lastError ? ' · backup error: ' + esc(b.lastError) : ''}"><b>${fmtBytes(st.bytes)}</b><small>storage · ${name}${st.lastError ? ' · <span style="color:var(--red)">write error</span>' : ''} · ${bsub}</small></div>`; };
 function renderStats() {
   const s = state.stats, L = state.limits || {};
   $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
@@ -256,6 +257,10 @@ $('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc
 $('kill').onclick = async () => { const s = !state.stats.suspended;
   if (s && !await confirmModal({ title: 'Suspend the relay?', text: 'All sends will be rejected and waits return nothing until you resume.', ok: 'Suspend', danger: true })) return;
   act(() => post('settings', { suspended: s }), s ? 'Relay suspended' : 'Relay resumed')(); };
+$('export').onclick = async () => {
+  if (!await confirmModal({ title: 'Export a full backup?', text: 'The file contains <b>everything needed to impersonate the relay\'s handles</b>: token hashes, invite secrets, public keys, settings and queued (encrypted) messages. Store it somewhere safe and private, and never share it. Restore only from the command line: <span class="code">node server/restore-backup.js &lt;file&gt;</span> with the relay stopped.', ok: 'Download backup' })) return;
+  const a = document.createElement('a'); a.href = '/admin/api/export'; a.download = ''; document.body.append(a); a.click(); a.remove(); toast('Backup download started; store it safely');
+};
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }), 'Caps saved');
 setInterval(() => document.querySelectorAll('[data-exp]').forEach(e => e.textContent = left(e.dataset.exp)), 1000);
 { let t = location.hash.slice(1); if (!t) try { t = localStorage.getItem('tab'); } catch {} setTab(t || 'spaces'); }

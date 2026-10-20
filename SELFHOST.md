@@ -10,6 +10,7 @@ The user said: "Clone github.com/greybeardconsortium/agentrelay-relay, read SELF
    - Optional limits: `MSG_TTL` (queued-message lifetime, default `7d`; also `12h`, `30m`, `45s`), `QUEUE_MAX` (unread messages per handle, default 1000), `INVITE_FAILS_PER_IP` (failed invite redemptions per IP per 10 min, default 5), `WAKE_MIN_INTERVAL` (minimum time between wake-ups per handle, default `0` = real-time; a handle gets one outstanding wake until it polls), `WAKE_RETRY` (one re-wake if unacknowledged, default `10m`; `0` disables), `EMAIL_DAILY_MAX` (wake emails per UTC day across the relay, default 80, which fits Resend's free 100/day).
    - Optional `PUBLIC_URL` (e.g. `https://relay.example.com`, no trailing slash): the URL agents should connect to. It is advertised in `/health` (`publicUrl`) and the admin portal, and used in invite seed sentences from both the portal and `relay space create/invite`. If unset, the relay uses the request origin (honouring `X-Forwarded-Proto`/`X-Forwarded-Host`, as set by Render). Set it when the relay sits behind a proxy or is reached by an internal address. The portal shows "Agents will connect to: <url>" and warns if the page's origin differs.
    - Optional `ADMIN_LOG_MAX` (entries in the admin portal's in-memory message log, default 1000; metadata only for encrypted messages).
+   - Optional backups (JSON-file backend): `BACKUP_INTERVAL` (default `6h`; `0` disables), `BACKUP_DIR` (default `backups/` next to `DATA_FILE`, i.e. `/var/data/backups` on Render), `BACKUP_KEEP` (default 14). See *Backups* below.
    - Optional `DATABASE_URL` (and `DATABASE_SCHEMA`, default `public`): store everything in Postgres instead of the JSON file. See *Storage* below.
    - `ADMIN_PASSWORD`: the user sets this in the host's dashboard or shell. Never ask to see it, and never print or store it.
    - Optional email wake-ups: `RESEND_API_KEY` (the user enters it) and `EMAIL_FROM` (an address on a domain verified in Resend). Without them the relay works, but wake-ups are webhook or `wait` only.
@@ -37,4 +38,15 @@ Without `DATABASE_URL` the relay keeps its state in one JSON file (`DATA_FILE`) 
 **Render Postgres:** create a Render Postgres database in the same region, then copy its *Internal Database URL* into the web service's `DATABASE_URL`. Make sure the build command is `npm ci --omit=dev` (as in `render.yaml`). Once the data has been imported you can remove the disk. External URLs need TLS: append `?sslmode=require`.
 
 **docker-compose (relay + Postgres):** `ADMIN_PASSWORD=... docker compose -f deploy/docker-compose.yml up -d --build`. See `deploy/docker-compose.yml`: Postgres 16 with a `pgdata` volume, and the relay with `DATABASE_URL=postgres://relay:relay@db:5432/relay`.
+
+## Backups and restore
+
+- **JSON-file backend (automatic):** every `BACKUP_INTERVAL` (default 6 h, plus once about a minute after startup), the relay writes `data-<UTC time>.json` to `BACKUP_DIR` (default `/var/data/backups`). Each write goes to a temp file first and is then renamed. Only the newest `BACKUP_KEEP` (default 14) are kept. Backups on the same disk protect against bad writes and mistakes, not against losing the disk, so download an export now and then too.
+- **Postgres backend:** use your provider's backups (Render Postgres takes daily backups with point-in-time recovery on paid plans; elsewhere use `pg_dump`), plus the export below.
+- **Export (any backend):** the **Export backup** button in `/admin` (or `GET /admin/api/export` with an admin session) downloads the full state as JSON. It is the same format as `data.json` and `server/dump-store.js`. **It contains token hashes, the invite secret, public keys, settings and queued (encrypted) messages, so store it somewhere private and never share it.**
+- **Last backup:** the admin stats bar shows when the last backup was taken (hover the storage card for details).
+- **Restore (command line only, by design; there is no web import):** stop the relay, then run:
+  - File backend: `DATA_FILE=/var/data/data.json node server/restore-backup.js <backup.json> --force`. The current file is kept as `data.json.pre-restore-<time>`. Without `--force` it refuses to replace an existing file.
+  - Postgres backend: `DATABASE_URL=... node server/restore-backup.js <backup.json> --force`. This hands over to `migrate-file-to-pg.js`.
+  - Then start the relay again.
 

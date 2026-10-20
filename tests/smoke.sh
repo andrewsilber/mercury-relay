@@ -10,7 +10,7 @@ ST() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then echo "DATABASE_URL=$SMOKE_DATAB
 DUMP() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then DATABASE_URL="$SMOKE_DATABASE_URL" DATABASE_SCHEMA="${RUNID}_$1" node "$ROOT/server/dump-store.js"; else cat "$TMP/$1.json"; fi; }
 if [ -n "${SMOKE_DATABASE_URL:-}" ]; then BACKEND=postgres; else BACKEND=json-file; fi; echo "storage backend: $BACKEND"
 unset MERCURY_RELAY_CONFIG MERCURY_RELAY_HANDLE MERCURY_RELAY_URL AGENTRELAY_CONFIG AGENTRELAY_HANDLE AGENTRELAY_URL RESEND_API_KEY
-(cd "$TMP" && INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT env $(ST data) node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
+(cd "$TMP" && BACKUP_INTERVAL=1s BACKUP_KEEP=2 BACKUP_FIRST_DELAY_MS=200 BACKUP_DIR="$TMP/backups" INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT env $(ST data) node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
 trap 'kill $SRV $(jobs -p) 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; done
 # Wrapper logs all CLI output so we can check address formatting at the end.
@@ -249,6 +249,19 @@ A -X DELETE "$URL/admin/api/handles/smoke-b" | grep -q '"deleted":"smoke-b"' || 
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-b"' && fail "handle still listed after delete"
 sleep 0.5; D="$(DUMP data)"; echo "$D" | grep -q '"suspended":false' && echo "$D" | grep -q '"sendPerMinute":1' || fail "settings not persisted"
 A "$URL/admin/api/storage" | grep -q "\"backend\":\"$BACKEND\"" || fail "storage info"
+# export (both backends) + restore tool + automatic file backups
+A -D "$TMP/exp.h" -o "$TMP/export.json" "$URL/admin/api/export"; grep -qi 'content-disposition: attachment; filename="agentrelay-backup-' "$TMP/exp.h" || fail "export not a download"
+grep -q '"smoke-a"' "$TMP/export.json" && grep -q '"inviteSecret"' "$TMP/export.json" || fail "export incomplete"
+curl -s -o /dev/null -w '%{http_code}' "$URL/admin/api/export" | grep -q 401 || fail "export without login"
+DATA_FILE="$TMP/restored.json" node "$ROOT/server/restore-backup.js" "$TMP/export.json" | grep -q "Restored" || fail "restore (file)"
+DATA_FILE="$TMP/restored.json" node "$ROOT/server/restore-backup.js" "$TMP/export.json" >/dev/null 2>&1 && fail "restore overwrote without --force"
+DATA_FILE="$TMP/restored.json" node "$ROOT/server/restore-backup.js" "$TMP/export.json" --force >/dev/null && ls "$TMP"/restored.json.pre-restore-* >/dev/null || fail "restore --force keeps old copy"
+if [ "$BACKEND" = json-file ]; then
+  sleep 2.5; N="$(ls "$TMP/backups" | grep -cE '^data-[0-9]{8}T[0-9]{6}Z\.json$')"; [ "$N" -ge 1 ] && [ "$N" -le 2 ] || fail "auto backups: $N files"
+  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' "$TMP/backups/$(ls "$TMP/backups" | tail -1)" || fail "backup not valid JSON"
+  ls -a "$TMP/backups" | grep -q '\.tmp$' && fail "temp backup left behind"
+  A "$URL/admin/api/storage" | grep -q '"last":{"at":' || fail "last backup not reported"
+else A "$URL/admin/api/storage" | grep -q '"backup":{"enabled":false' || fail "pg backup status"; fi
 A "$URL/admin/api/storage" | grep -q '"max":1000' || fail "message log cap not reported"
 grep -q "dana@acme" "$TMP/cli-output.log" || { echo "FAIL: output log not captured"; exit 1; }
 grep -E '@[a-z0-9_-]+@' "$TMP/cli-output.log" && { echo "FAIL: CLI printed a double-@ address (above)"; exit 1; }

@@ -14,6 +14,7 @@ const store = DATABASE_URL ? createPgStore({ url: DATABASE_URL, schema: process.
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
 const limits = { adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
+const backup = DATABASE_URL ? { enabled: false, reason: 'postgres: use your provider\'s backups plus GET /admin/api/export' } : require('./backup.js')({ getData: () => relay.data, dir: process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(DATA_FILE)), 'backups'), intervalMs: process.env.BACKUP_INTERVAL != null && process.env.BACKUP_INTERVAL !== '' ? parseDur(process.env.BACKUP_INTERVAL) : 6 * 3600e3, keep: Math.max(1, +process.env.BACKUP_KEEP || 14), firstDelayMs: +process.env.BACKUP_FIRST_DELAY_MS || 60e3 });
 // Flush pending writes on deploy/restart so nothing is lost.
 const flushOnExit = () => { try { relay.flushStore(); } catch (e) { console.error('final save failed: ' + e.message); } };
 process.on('exit', flushOnExit); // sync path (file store); Postgres writes are drained in the signal handler below
@@ -27,7 +28,7 @@ function body(req, cb, res) {
 // Client IP: the rightmost X-Forwarded-For entry (added by the hosting proxy; leftmost entries are client-controlled).
 const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); };
 const reply = (res, r) => json(res, r.code, r.body);
-const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush, store });
+const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush, store, backup });
 
 // Authenticated routes: [method, path] -> (me, msg) => result. POST handlers get the JSON body.
 const AUTHED = {
@@ -45,6 +46,13 @@ const AUTHED = {
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
+  if (req.method === 'GET' && (u.pathname === '/preview' || u.pathname.startsWith('/preview/'))) { // static visual prototype, no auth
+    if (u.pathname === '/preview') { res.writeHead(302, { Location: '/preview/' }); return res.end(); }
+    const root = path.join(__dirname, '..', 'preview'), f = path.normalize(path.join(root, decodeURIComponent(u.pathname.slice(9)) || 'index.html'));
+    const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'application/javascript', '.svg': 'image/svg+xml', '.png': 'image/png' };
+    if (!f.startsWith(root + path.sep)) { res.writeHead(404); return res.end(); }
+    return fs.readFile(f, (e, b) => { if (e) { res.writeHead(404); return res.end('not found'); } res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store' }); res.end(b); });
+  }
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, publicUrl: publicUrl(req), limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const km = /^\/keys\/(.+)$/.exec(u.pathname);

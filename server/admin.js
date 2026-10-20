@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const SESSION_MS = 12 * 3600e3;
-module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flush, store }) {
+module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flush, store, backup }) {
   const PW = process.env.ADMIN_PASSWORD || '';
   const sessions = new Map(); // token -> expiry ms
   const attempts = new Map(); // ip -> [ms]
@@ -69,9 +69,14 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
       const { page, total, offset, limit } = paged(list, u);
       return json(res, 200, { total, offset, limit, messages: page.map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size, encrypted: m.encrypted }) });
     }
+    if (req.method === 'GET' && p === '/admin/api/export') { // full state dump (same format as data.json / dump-store.js); contains token hashes and public keys
+      const name = 'agentrelay-backup-' + new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z') + '.json';
+      res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store' });
+      return res.end(JSON.stringify(data));
+    }
     if (req.method === 'GET' && p === '/admin/api/storage') {
       if (!store || !store.info) return json(res, 200, { backend: 'unknown' });
-      return store.info().then(i => { delete i.file; json(res, 200, { ...i, messageLog: { entries: msgLog.length, max: relay.limits.adminLogMax } }); }, e => json(res, 500, { error: 'storage info failed: ' + e.message }));
+      return store.info().then(i => { delete i.file; const b = backup ? { ...backup } : null; if (b) { delete b.run; delete b.dir; } json(res, 200, { ...i, messageLog: { entries: msgLog.length, max: relay.limits.adminLogMax }, backup: b }); }, e => json(res, 500, { error: 'storage info failed: ' + e.message }));
     }
     if (req.method === 'GET' && p === '/admin/api/handles') { // ?q&space&limit&offset
       const q = String(u.searchParams.get('q') || '').toLowerCase(), sp = u.searchParams.get('space');
