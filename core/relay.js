@@ -6,6 +6,20 @@ const B64 = /^[A-Za-z0-9+/=]{1,200000}$/;
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 const validKey = (k, len) => typeof k === 'string' && B64.test(k) && Buffer.from(k, 'base64').length === len; // SPKI DER x25519/ed25519 = 44 bytes
 const validEnc = e => e && typeof e === 'object' && (e.v === 1 || e.v === 2) && validKey(e.epk, 44) && typeof e.nonce === 'string' && B64.test(e.nonce) && typeof e.ct === 'string' && B64.test(e.ct) && typeof e.sig === 'string' && B64.test(e.sig);
+const RESERVED_SPACES = new Set(['public', 'admin', 'api', 'relay', 'system', 'support', 'www', 'gbc']);
+const RESERVED_HANDLES = new Set(['admin', 'relay', 'system', 'support']);
+const PUBLIC = 'public';
+// Address grammar: "dana" (sender's space), "dana@acme" (space acme), "dana@public" == "dana". Leading @ ignored.
+// Storage key: public handles are bare ("dana"), private ones "dana@acme".
+const keyOf = (h, sp) => sp === PUBLIC ? h : h + '@' + sp;
+function parseAddr(a, defSpace) {
+  const s = String(a || '').trim().toLowerCase().replace(/^@/, '');
+  const i = s.indexOf('@'); const h = i < 0 ? s : s.slice(0, i), sp = i < 0 ? defSpace : s.slice(i + 1);
+  if (sp.includes('.')) return { error: 'federated addresses (handle@space.domain) are not supported yet' };
+  if (!HANDLE_RE.test(h) || !HANDLE_RE.test(sp)) return { error: 'invalid address' };
+  return { handle: h, space: sp, key: keyOf(h, sp) };
+}
+const DUR = { m: 60e3, h: 3600e3, d: 86400e3 };
 const ok = body => ({ code: 200, body });
 const err = (code, error) => ({ code, body: { error } });
 const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
@@ -17,6 +31,21 @@ function createRelay({ store, notifier }) {
   data.settings ||= {}; const S = data.settings;
   S.suspended = !!S.suspended; S.pairPerHour = +S.pairPerHour || 0; S.sendPerMinute = +S.sendPerMinute || 0; S.requireEncryption = !!S.requireEncryption;
   data.stats ||= { day: '', count: 0 };
+  // Spaces: migrate legacy data (every existing handle -> public space).
+  data.spaces ||= {}; data.spaces[PUBLIC] ||= { created: new Date().toISOString(), owner: null };
+  for (const [k, h] of Object.entries(data.handles)) if (!h.space) { const i = k.indexOf('@'); h.space = i < 0 ? PUBLIC : k.slice(i + 1); h.role ||= 'member'; }
+  const spaceOf = me => (data.handles[me] || {}).space || PUBLIC;
+  const canManage = (me, sp) => sp !== PUBLIC && data.spaces[sp] && (data.spaces[sp].owner === me || (spaceOf(me) === sp && ['owner', 'admin'].includes(data.handles[me].role)));
+  function newInvite(sp, by, { uses, expires, role } = {}) {
+    const code = sp + '-' + crypto.randomBytes(6).toString('hex');
+    const ms = /^(\d+)([mhd])$/.exec(String(expires || '7d')); if (!ms) return err(400, 'expires must look like 30m, 12h or 7d');
+    const maxUses = Math.floor(+uses || 1); if (!(maxUses >= 1 && maxUses <= 10000)) return err(400, 'uses must be 1-10000');
+    if (role && !['member', 'agent', 'admin'].includes(role)) return err(400, 'role must be member, agent or admin');
+    const exp = new Date(Date.now() + +ms[1] * DUR[ms[2]]).toISOString();
+    (data.spaces[sp].invites ||= {})[sha(code)] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString() };
+    save();
+    return ok({ space: sp, invite: code, maxUses, expires: exp });
+  }
   const save = () => store.save();
   let seenDirty = false; // lastSeen-only changes: persisted with the next real save, or every 30 s
   setInterval(() => { if (seenDirty && !store.pending()) { seenDirty = false; save(); } }, 30000).unref();
@@ -78,25 +107,59 @@ function createRelay({ store, notifier }) {
   const relay = {
     data, waiters, msgLog, flush, save, flushStore, auth,
     register(m) {
-      const handle = String(m.handle || '').replace(/^@/, '');
+      const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
+      const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);
+      const space = String(m.space || (at < 0 ? PUBLIC : raw.slice(at + 1))).toLowerCase();
       if (!HANDLE_RE.test(handle)) return err(400, 'handle must be 3-32 chars of a-z, 0-9, _ or -');
-      if (data.handles[handle]) return err(409, 'handle taken');
+      if (RESERVED_HANDLES.has(handle)) return err(400, 'handle @' + handle + ' is reserved');
+      const sp = data.spaces[space];
+      if (!sp) return err(404, 'unknown space ' + space);
+      let inv = null, role = 'member';
+      if (space !== PUBLIC) {
+        inv = (sp.invites || {})[sha(String(m.invite || ''))];
+        if (!inv || inv.uses >= inv.maxUses || Date.parse(inv.expires) < Date.now()) return err(403, 'joining space ' + space + ' needs a valid invite code (ask its owner)');
+        role = inv.role;
+      }
+      const key = keyOf(handle, space);
+      if (data.handles[key]) return err(409, 'handle taken');
+      if (inv) inv.uses++;
       const token = crypto.randomBytes(32).toString('hex');
-      data.handles[handle] = { tokenHash: sha(token), created: new Date().toISOString() };
-      data.queues[handle] = [];
-      tokenIndex.set(data.handles[handle].tokenHash, handle); indexedCount++;
+      data.handles[key] = { tokenHash: sha(token), created: new Date().toISOString(), space, role };
+      data.queues[key] = [];
+      tokenIndex.set(data.handles[key].tokenHash, key); indexedCount++;
       save();
-      return ok({ handle, token });
+      return ok({ handle: key, space, role, token });
     },
-    getKeys(handle) { const h = data.handles[String(handle).replace(/^@/, '')]; if (!h || !h.keys) return err(404, 'no keys for handle'); return ok({ handle: String(handle).replace(/^@/, ''), ...h.keys }); },
+    createSpace(me, m) {
+      const name = String(m.name || '').trim().toLowerCase();
+      if (!HANDLE_RE.test(name)) return err(400, 'space name must be 3-32 chars of a-z, 0-9, _ or -');
+      if (RESERVED_SPACES.has(name)) return err(400, 'space name ' + name + ' is reserved');
+      if (data.spaces[name]) return err(409, 'space taken');
+      data.spaces[name] = { created: new Date().toISOString(), owner: me, invites: {} };
+      return newInvite(name, me, { uses: m.uses || 25, expires: m.expires || '7d' });
+    },
+    invite(me, name, m) {
+      if (!data.spaces[name] || !canManage(me, name)) return err(403, 'only the space owner or a space admin can create invites');
+      return newInvite(name, me, m);
+    },
+    createInviteAsOperator(name, m) { return data.spaces[name] && name !== PUBLIC ? newInvite(name, 'operator', m) : err(404, 'unknown space'); },
+    createSpaceAsOperator(m) { const r = relay.createSpace('operator', m); if (r.code === 200) data.spaces[r.body.space].owner = null; return r; },
+    getKeys(addr, viewer) { // private-space keys are visible only to members of that space
+      const a = parseAddr(addr, viewer ? spaceOf(viewer) : PUBLIC), h = a.key && data.handles[a.key];
+      if (!h || !h.keys || (h.space !== PUBLIC && (!viewer || spaceOf(viewer) !== h.space))) return err(404, 'no keys for handle');
+      return ok({ handle: a.key, ...h.keys });
+    },
     setKeys(me, m) {
       if (!validKey(m.x25519, 44) || !validKey(m.ed25519, 44)) return err(400, 'x25519 and ed25519 must be base64 SPKI DER public keys');
       data.handles[me].keys = { x25519: m.x25519, ed25519: m.ed25519, updated: new Date().toISOString() }; save();
       return ok({ ok: true });
     },
     send(me, m) {
-      const to = String(m.to || '').replace(/^@/, ''), enc = m.enc;
-      if (!to || (!m.text && !enc)) return err(400, 'to and text (or enc) required');
+      const enc = m.enc;
+      if (!m.to || (!m.text && !enc)) return err(400, 'to and text (or enc) required');
+      const a = parseAddr(m.to, spaceOf(me)); if (a.error) return err(400, a.error);
+      const to = a.key, mySpace = spaceOf(me);
+      if (a.space !== mySpace) return err(403, `cross-space messaging is not enabled (you are in ${mySpace}, @${a.key} would be in ${a.space}); space-to-space grants are coming later`);
       if (enc && !validEnc(enc)) return err(400, 'invalid encrypted envelope');
       if (!enc && S.requireEncryption) return err(400, 'this relay requires end-to-end encryption; update the CLI (git pull) and retry');
       if (!data.handles[to]) return err(404, 'unknown recipient');
@@ -109,12 +172,12 @@ function createRelay({ store, notifier }) {
     },
     status(me) {
       const h = data.handles[me];
-      return ok({ handle: me, webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
+      return ok({ handle: me, space: spaceOf(me), role: data.handles[me].role || 'member', webhook: !!h.webhook, lastWebhookStatus: h.lastWebhookStatus || null, lastWebhookAt: h.lastWebhookAt || null, email: !!h.email, lastEmailStatus: h.lastEmailStatus || null, lastEmailAt: h.lastEmailAt || null, unreadCount: (data.queues[me] || []).length, keys: !!h.keys, requireEncryption: S.requireEncryption, lastPollAt: h.lastSeen || null });
     },
     // Long-poll. cb(code, body) is called exactly once unless the returned cancel() runs first.
     poll(me, { handle, timeoutMs }, cb) {
       seen(me);
-      if (handle && String(handle).replace(/^@/, '') !== me) { cb(403, { error: 'token does not match handle' }); return () => {}; }
+      if (handle && String(handle).toLowerCase().replace(/^@/, '').replace(/@public$/, '') !== me) { cb(403, { error: 'token does not match handle' }); return () => {}; }
       if (data.handles[me].status === 'blocked') { cb(403, { error: 'handle blocked by admin' }); return () => {}; }
       const q = S.suspended ? [] : (data.queues[me] || []);
       if (S.suspended && timeoutMs === 0) { cb(200, { messages: [] }); return () => {}; }
@@ -156,4 +219,4 @@ function createRelay({ store, notifier }) {
   };
   return relay;
 }
-module.exports = { createRelay };
+module.exports = { createRelay, parseAddr, keyOf, RESERVED_SPACES, RESERVED_HANDLES };

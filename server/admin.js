@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const SESSION_MS = 12 * 3600e3;
-module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
+module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flush }) {
   const PW = process.env.ADMIN_PASSWORD || '';
   const sessions = new Map(); // token -> expiry ms
   const attempts = new Map(); // ip -> [ms]
@@ -20,7 +20,7 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
   function cookie(tok, maxAge) { return 'admin_session=' + tok + '; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=' + maxAge; }
   function handleView(name) {
     const h = data.handles[name];
-    return { handle: name, created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active' };
+    return { handle: name, space: h.space || 'public', role: h.role || 'member', created: h.created || null, lastSeen: h.lastSeen || null, queue: (data.queues[name] || []).length, email: !!h.email, webhook: !!h.webhook, keys: !!h.keys, status: h.status || 'active' };
   }
   function stats() {
     const today = new Date().toISOString().slice(0, 10);
@@ -52,7 +52,7 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
     if (req.method === 'POST' && req.headers['x-admin'] !== '1') return json(res, 403, { error: 'missing X-Admin header' }); // CSRF belt-and-braces
     if (req.method === 'POST' && p === '/admin/api/logout') { sessions.delete(tok); res.setHeader('set-cookie', cookie('', 0)); return json(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/admin/api/state') {
-      return json(res, 200, { stats: stats(), settings: data.settings, handles: Object.keys(data.handles).sort().map(handleView) });
+      return json(res, 200, { stats: stats(), settings: data.settings, handles: Object.keys(data.handles).sort().map(handleView), spaces: Object.entries(data.spaces || {}).map(([name, sp]) => ({ name, owner: sp.owner || null, created: sp.created, members: Object.values(data.handles).filter(h => (h.space || 'public') === name).length })) });
     }
     if (req.method === 'GET' && p === '/admin/api/messages') {
       const withText = u.searchParams.get('text') === '1';
@@ -69,7 +69,10 @@ module.exports = function ({ data, save, json, body, waiters, msgLog, flush }) {
         json(res, 200, { ok: true, settings: s });
       }, res);
     }
-    const hm = /^\/admin\/api\/handles\/([a-z0-9_-]{3,32})(?:\/(status))?$/.exec(p);
+    if (req.method === 'POST' && p === '/admin/api/spaces') return body(req, m => { const r = relay.createSpaceAsOperator(m); json(res, r.code, r.body); }, res);
+    const sm = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})\/invites$/.exec(p);
+    if (req.method === 'POST' && sm) return body(req, m => { const r = relay.createInviteAsOperator(sm[1], m); json(res, r.code, r.body); }, res);
+    const hm = /^\/admin\/api\/handles\/([a-z0-9_-]{3,32}(?:@[a-z0-9_-]{3,32})?)(?:\/(status))?$/.exec(p);
     if (hm && data.handles[hm[1]]) {
       const name = hm[1];
       if (req.method === 'POST' && hm[2] === 'status') return body(req, m => {

@@ -27,6 +27,7 @@ const AUTHED = {
   'POST /keys': (me, m) => relay.setKeys(me, m),
   'POST /send': (me, m) => relay.send(me, m),
   'GET /status': me => relay.status(me),
+  'POST /spaces': (me, m) => relay.createSpace(me, m),
   'POST /ack': (me, m) => relay.ack(me, m),
   'GET /webhook': me => relay.getWebhook(me),
   'POST /webhook': (me, m) => relay.setWebhook(me, m),
@@ -49,6 +50,8 @@ http.createServer((req, res) => {
     req.on('close', cancel);
     return;
   }
+  const im = /^\/spaces\/([a-z0-9_-]{3,32})\/invites$/.exec(u.pathname);
+  if (req.method === 'POST' && im) { if (!me) return json(res, 401, { error: 'invalid or missing token' }); return body(req, m => reply(res, relay.invite(me, im[1], m)), res); }
   const route = AUTHED[req.method + ' ' + u.pathname];
   if (route) {
     if (!me) return json(res, 401, { error: 'invalid or missing token' });

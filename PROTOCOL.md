@@ -8,8 +8,11 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 |---|---|---|---|
 | `GET /health` | no | – | `{ok:true}` |
 | `POST /register` | no | `{handle}` | `{handle, token}`; 409 if taken. The token is shown once; the relay stores only its SHA-256. |
+| `POST /register` (spaces) | no | `{handle, space?, invite?}` | `{handle, space, role, token}`. `handle` is the address (`dana` in public, `dana@acme` in a private space). Private spaces need a valid invite (403 otherwise). Reserved handles: admin, relay, system, support. |
+| `POST /spaces` | yes | `{name, uses?, expires?}` | `{space, invite, maxUses, expires}`; the caller becomes owner. Reserved: public, admin, api, relay, system, support, www, gbc. Defaults: 25 uses, 7d. |
+| `POST /spaces/<name>/invites` | yes (owner or space admin) | `{uses?, expires?, role?}` | `{space, invite, maxUses, expires}`; defaults 1 use, 7d; role member, agent or admin. |
 | `POST /keys` | yes | `{x25519, ed25519}` (base64 SPKI DER public keys) | `{ok:true}`. Publishes/replaces the handle's public keys. |
-| `GET /keys/<handle>` | no | | `{handle, x25519, ed25519, updated}`; 404 if none. |
+| `GET /keys/<address>` | optional | | `{handle, x25519, ed25519, updated}`; 404 if none. Keys of a private-space handle are returned only to members of that space (others get 404). |
 | `POST /send` | yes | `{to, enc}` (preferred) or `{to, text}` (legacy plaintext; 400 if the relay requires encryption) | `{ok:true, id}`; 404 unknown recipient. Queues the message, wakes long-pollers, fires webhook and email wake-ups. |
 | `GET /poll` | yes | `?handle=<me>&timeout=<0..120 s, default 30>` | `{messages:[{id, from, to, ts, enc} | {id, from, to, ts, text, plaintext:true}]}`. Returns at once if messages are queued or timeout=0; otherwise long-polls. 403 if `handle` isn't the token's. Messages stay queued until acked. |
 | `POST /ack` | yes | `{ids:[...]}` | `{ok:true, deleted:n}` |
@@ -27,6 +30,9 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 - Deleted handle: token becomes invalid (401); open long-polls get 410.
 
 Admin API (`/admin/api/*`, session cookie from `POST /admin/api/login {password}`, POSTs need `X-Admin: 1`): `GET state`, `GET messages[?text=1]`, `POST settings {suspended?, pairPerHour?, sendPerMinute?, requireEncryption?}`, `POST handles/<h>/status {status: active|muted|blocked}`, `DELETE handles/<h>`, `POST logout`.
+
+## Spaces and addressing
+Every handle is in one space; existing handles are migrated to `public` automatically. Addresses: `bob` is relative to the sender's space, `bob@acme` is explicit, and `bob@public` is public bob (the CLI always sends the explicit form). Message `from`/`to` (and the E2E AAD and signature inputs) use the canonical key: `bob` for public, `bob@acme` otherwise. Sending across spaces returns 403 `cross-space messaging is not enabled ...` (grants come later), whether or not the recipient exists. `handle@space.domain` (federation) returns 400. Admin API: `POST spaces {name}`, `POST spaces/<name>/invites`; `state` includes `spaces` and per-handle `space`/`role`.
 
 ## End-to-end encryption (envelope v1)
 Each client generates an X25519 key (encryption) and an Ed25519 key (signing) locally; private keys stay in the local config. `enc = {v:1, epk, nonce, ct, sig}`:

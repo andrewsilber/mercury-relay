@@ -24,6 +24,15 @@ function resolveConf() {
   return fs.existsSync(LEGACY) ? LEGACY : null;
 }
 const e2e = require('./e2e.js');
+// Addresses: "bob" = bob in my space, "bob@acme" = bob in space acme, "bob@public" = public bob. Canonical form matches the relay's keys.
+const mySpace = c => c.space || (c.handle.includes('@') ? c.handle.split('@')[1] : 'public');
+function canon(c, a) {
+  const s = norm(a); const i = s.indexOf('@');
+  const h = i < 0 ? s : s.slice(0, i), sp = i < 0 ? mySpace(c) : s.slice(i + 1);
+  return sp === 'public' ? h : h + '@' + sp;
+}
+const wire = a => a.includes('@') ? a : a + '@public'; // explicit on the wire so the relay never resolves relative to the sender's space
+const disp = (c, a) => { const sp = mySpace(c); return sp !== 'public' && a.endsWith('@' + sp) ? a.slice(0, -sp.length - 1) : (sp !== 'public' && !a.includes('@') ? a + '@public' : a); };
 const loadConf = () => { const p = resolveConf(); const c = p ? readJson(p) : null; if (c) Object.defineProperty(c, '_path', { value: p, enumerable: false }); return c; };
 const saveConf = c => { if (c._path) fs.writeFileSync(c._path, JSON.stringify(c, null, 2), { mode: 0o600 }); };
 // Generate keys locally if missing and publish the public half. Private keys never leave the config file.
@@ -36,7 +45,7 @@ async function ensureKeys(c) {
   return c;
 }
 async function peerKeys(c, h) { // fetch + pin (trust on first use)
-  let k; try { k = await call(c, 'GET', '/keys/' + encodeURIComponent(h)); } catch (e) { if (e.status === 404) return null; throw e; }
+  let k; try { k = await call(c, 'GET', '/keys/' + encodeURIComponent(wire(h))); } catch (e) { if (e.status === 404) return null; throw e; }
   if (!k || !k.x25519 || !k.ed25519) return null;
   c.peers ||= {}; const fp = e2e.fingerprint(k), old = c.peers[h];
   if (old && old !== fp) console.error(`[relay] WARNING: @${h}'s key changed (was ${old}, now ${fp}). They may have re-initialized, or the relay may be lying. Confirm with @${h}'s user out of band.`);
@@ -44,13 +53,13 @@ async function peerKeys(c, h) { // fetch + pin (trust on first use)
   return k;
 }
 async function openMsg(c, m) {
-  if (!m.enc) return `[relay] from @${m.from} at ${m.ts} [UNENCRYPTED]: ${m.text}`;
+  if (!m.enc) return `[relay] from @${disp(c, m.from)} at ${m.ts} [UNENCRYPTED]: ${m.text}`;
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
     const others = r.cc.filter(h => h !== c.handle && h !== m.from);
     if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others }; saveConf(c); }
-    return `[relay] from @${m.from}${others.length ? ' to you + ' + others.map(h => '@' + h).join(', ') : ''} at ${m.ts} [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
+    return `[relay] from @${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => '@' + disp(c, h)).join(', ') : ''} at ${m.ts} [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
   } catch (e) { return `[relay] from @${m.from} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
@@ -122,23 +131,28 @@ if (isMain) (async () => {
   try {
     if (cmd === 'init') {
       const i = args.indexOf('--url'); let flagUrl = null; if (i >= 0) { flagUrl = args[i + 1]; args.splice(i, 2); }
-      const raw = (args[0] || '').replace(/^@/, '');
-      if (!raw) { console.error('usage: relay init <handle> [--url URL]'); process.exit(2); }
+      const flag = n => { const k = args.indexOf(n); if (k < 0) return null; const v = args[k + 1]; args.splice(k, 2); return v; };
+      let space = flag('--space'); const invite = flag('--invite');
+      let raw = (args[0] || '').replace(/^@/, '');
+      if (!raw) { console.error('usage: relay init <handle> [--url URL] [--space <name> --invite <code>]'); process.exit(2); }
+      if (raw.includes('@')) { space ||= raw.split('@')[1]; raw = raw.split('@')[0]; }
+      space = norm(space || 'public');
       const handle = norm(raw);
       if (handle !== raw) console.log(`Note: handles are lowercase; using @${handle} instead of @${raw}`);
-      const file = confPath(handle);
+      const key = space === 'public' ? handle : handle + '@' + space;
+      const file = confPath(key);
       const existing = readJson(file);
       if (existing && existing.token) { console.error(`@${handle} already has a saved identity at ${file}; not overwriting. Use it as is (MERCURY_RELAY_HANDLE=${handle}) or pick a different handle.`); process.exit(1); }
       const known = identities().map(h => readJson(confPath(h)) || {}).find(c => c.url);
       let url = flagUrl || ENV('URL') || process.env.RELAY_URL || (known || {}).url || (readJson(LEGACY) || {}).url || DEFAULT_URL;
       url = url.replace(/\/+$/, '');
-      const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ handle }) });
+      const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(space === 'public' ? { handle } : { handle, space, invite }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { console.error('register failed: ' + (j.error || r.status)); process.exit(1); }
       fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, token: j.token }, null, 2), { mode: 0o600 });
+      fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, space: j.space || 'public', token: j.token }, null, 2), { mode: 0o600 });
       { const c0 = readJson(file); Object.defineProperty(c0, '_path', { value: file }); await ensureKeys(c0); }
-      console.log(`Connected to the relay as @${j.handle} (${url}). Config saved to ${file}`);
+      console.log(`Connected to the relay as @${j.handle}${j.space && j.space !== 'public' ? ` (space ${j.space}; inside it you are just @${handle})` : ''} (${url}). Config saved to ${file}`);
       console.log(`Use this identity in later commands: MERCURY_RELAY_HANDLE=${j.handle} node relay.js ...  (or --as ${j.handle})`);
       console.log('');
       for (const l of await verdict({ url, token: j.token, handle: j.handle })) console.log(l);
@@ -175,13 +189,13 @@ if (isMain) (async () => {
         if (!hook && !mail) console.log('\nNo webhook registered for @' + c.handle + '. Register one: node relay.js webhook "<url>" --header "Authorization: <key>" (Grok Bot: follow the Webhook upgrade steps in AGENTS.md), then re-run setup --test.');
         else {
           await ensureKeys(c); const st = 'Relay wake-up self-test at ' + new Date().toISOString(), pk = await peerKeys(c, c.handle);
-          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: c.handle, enc: e2e.encrypt(st, c.handle, c.handle, pk, c.keys) } : { to: c.handle, text: st });
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(c.handle), enc: e2e.encrypt(st, c.handle, c.handle, pk, c.keys) } : { to: wire(c.handle), text: st });
           console.log('\nSent a test message to yourself (id ' + j.id + '). Expect: your agent should wake within ~10s and report a message from yourself (@' + c.handle + '). If nothing happens, check the routine is on and the URL/header are right. Run `node relay.js poll` to clear the test message afterwards.');
         }
       } else if (c) nextSteps(c);
     } else if (cmd === 'send' || cmd === 'reply-all') {
       const c = need(); let list, text;
-      if (cmd === 'send') { list = (args.shift() || '').split(',').map(norm).filter(Boolean); text = args.join(' '); }
+      if (cmd === 'send') { list = (args.shift() || '').split(',').filter(x => x.trim()).map(x => canon(c, x.trim())); text = args.join(' '); }
       else { const g = c.lastGroup; if (!g) { console.error('no group message to reply to yet'); process.exit(2); } list = [g.from, ...g.cc]; text = args.join(' '); }
       list = [...new Set(list)].filter(h => cmd === 'send' || h !== c.handle);
       if (!list.length || !text) { console.error('usage: relay send <to>[,<to2>,...] <text> | reply-all <text>'); process.exit(2); }
@@ -189,11 +203,19 @@ if (isMain) (async () => {
       for (const to of list) {
         try {
           const pk = await peerKeys(c, to), cc = list.length > 1 ? list : null;
-          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to, enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc) } : { to, text: cc ? `[group: ${cc.map(h => '@' + h).join(', ')}] ${text}` : text });
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(to), enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc) } : { to: wire(to), text: cc ? `[group: ${cc.map(h => '@' + h).join(', ')}] ${text}` : text });
           console.log(`sent to @${to} (id ${j.id})${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : '@' + to + ' has no key yet') + ']'}`);
         } catch (e) { failed++; console.log(`FAILED to @${to}: ${e.message}`); }
       }
       if (failed) process.exit(1);
+    } else if (cmd === 'space') {
+      const c = need(); const sub = args.shift(), name = norm(args.shift() || '');
+      const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
+      if (!name || !['create', 'invite'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 7d]'); process.exit(2); }
+      const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires') });
+      if (sub === 'create') console.log(`Created space ${name} (you are its owner).`);
+      console.log(`Invite code: ${j.invite}  (${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
+      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> in ${name} with invite ${j.invite}${c.url !== DEFAULT_URL ? ' at ' + c.url : ''}."`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {
@@ -213,6 +235,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 7d] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

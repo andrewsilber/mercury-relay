@@ -50,6 +50,33 @@ $R --as smoke-g reply-all "ack all" | grep -c "sent to" | grep -q 2 || efail "re
 $R --as smoke-a poll | grep -q "from @smoke-g to you + @smoke-b .*ack all" || efail "reply-all at a"
 $R --as smoke-b poll | grep -q "ack all" || efail "reply-all at b"
 echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged"
+# --- spaces ---
+sfail() { echo "FAIL: $*"; exit 1; }
+SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | grep -o 'acme-[a-f0-9]*' | head -1)"; [ -n "$CODE" ] || sfail "space create: $SC1"
+OUT="$($R --as smoke-a space create admin 2>&1 || true)"; echo "$OUT" | grep -q reserved || sfail "reserved space: $OUT"
+OUT="$($R init eve --space acme --invite acme-bogus 2>&1 || true)"; echo "$OUT" | grep -q "valid invite" || sfail "bad invite: $OUT"
+$R init dana --space acme --invite "$CODE" | grep -q "space acme" || sfail "join dana"
+$R init bob@acme --invite "$CODE" >/dev/null || sfail "join bob"
+$R init dana --url "$URL" >/dev/null || sfail "public dana (per-space uniqueness)"
+SM="space secret $RANDOM"
+$R --as dana@acme send bob "$SM" | grep -q "end-to-end encrypted" || sfail "intra-space send"
+OUT="$($R --as bob@acme poll)"; echo "$OUT" | grep -q "from @dana .*$SM" || sfail "intra-space poll: $OUT"
+OUT="$($R --as dana@acme send smoke-a@public "hi" 2>&1 || true)"; echo "$OUT" | grep -q "cross-space" || sfail "cross-space from acme: $OUT"
+OUT="$($R --as smoke-a send dana@acme "hi" 2>&1 || true)"; echo "$OUT" | grep -q "cross-space" || sfail "cross-space from public: $OUT"
+$R --as smoke-a send dana "public dana" >/dev/null && $R --as dana poll | grep -q "public dana" || sfail "public unaffected"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/keys/dana@acme")" = 404 ] || sfail "private keys visible to outsiders"
+OUT="$($R --as bob@acme space invite acme 2>&1 || true)"; echo "$OUT" | grep -q "only the space owner" || sfail "member invite: $OUT"
+$R --as smoke-a space invite acme --uses 2 --expires 1d | grep -q "2 uses" || sfail "owner invite"
+sleep 0.5; grep -qF "$SM" "$TMP/data.json" && sfail "space plaintext in data file"
+# migration of an old (pre-spaces) data file
+MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"
+echo "{\"handles\":{\"oldie\":{\"tokenHash\":\"$OH\",\"created\":\"2026-01-01T00:00:00Z\"}},\"queues\":{\"oldie\":[]}}" > "$TMP/old.json"
+(cd "$TMP" && PORT=$MP DATA_FILE="$TMP/old.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV2=$!
+for i in $(seq 50); do curl -sf "http://127.0.0.1:$MP/health" >/dev/null && break; sleep 0.1; done
+curl -s -H "authorization: Bearer $OT" "http://127.0.0.1:$MP/status" | grep -q '"space":"public"' || { kill $SRV2; sfail "migration status"; }
+curl -s -H "authorization: Bearer $OT" -d '{"to":"oldie","text":"still works"}' "http://127.0.0.1:$MP/send" | grep -q '"ok":true' || { kill $SRV2; sfail "migrated send"; }
+kill $SRV2; sleep 0.3; grep -q '"space":"public"' "$TMP/old.json" || sfail "migration not persisted"
+echo "PASS: spaces create/invite/join, intra-space encrypted, cross-space rejected, public unaffected, private keys hidden, migration"
 # --- admin ---
 fail() { echo "FAIL: $*"; exit 1; }
 curl -s "$URL/admin" | grep -q "Relay admin" || fail "admin page not served"
@@ -60,6 +87,8 @@ echo "$SC" | grep -q HttpOnly && echo "$SC" | grep -q Secure && echo "$SC" | gre
 CK="$(echo "$SC" | grep -o 'admin_session=[a-f0-9]*')"
 A() { curl -s -H "Cookie: $CK" -H 'x-admin: 1' -H 'content-type: application/json' "$@"; }
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-a"' || fail "state lacks handles"
+A "$URL/admin/api/state" | grep -q '"space":"acme"' || fail "state lacks space column"
+A -X POST -d '{"name":"globex"}' "$URL/admin/api/spaces" | grep -q '"invite":"globex-' || fail "admin create space"
 A "$URL/admin/api/messages" | grep -q '"from":"smoke-a"' || fail "message log empty"
 A "$URL/admin/api/messages" | grep -qF "$MSG" && fail "message text shown without toggle"
 A "$URL/admin/api/messages?text=1" | grep -qF "$SECRET" && fail "admin log shows e2e plaintext"

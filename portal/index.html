@@ -28,7 +28,8 @@ pre{white-space:pre-wrap;margin:0;font-size:12px;background:#f3f3f3;padding:4px}
 <p><button id="kill" class="danger"></button></p>
 <p>Max messages per conversation pair per hour <input type="number" min="0" id="pair"> &nbsp;
 Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p><p><label><input type="checkbox" id="reqenc"> Require end-to-end encryption (reject plaintext sends)</label></p></section>
-<section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
+<section><h2>Spaces</h2><table><thead><tr><th>Space</th><th>Owner</th><th>Members</th><th>Created</th><th></th></tr></thead><tbody id="spaces"></tbody></table><p>New space <input id="spname" placeholder="acme"> <button id="spcreate">Create space + invite</button> <span id="spout"></span></p></section>
+<section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Space</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
 <section><h2>Recent messages <label style="font-weight:normal;font-size:13px"><input type="checkbox" id="showtext"> show text</label></h2>
 <table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></section>
 <p class="err" id="err"></p>
@@ -57,7 +58,8 @@ async function load() {
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
     $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
-    $('handles').innerHTML = state.handles.map(h => `<tr><td>@${esc(h.handle)}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
+    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? '@' + esc(x.owner) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button>`}</td></tr>`).join('');
+    $('handles').innerHTML = state.handles.map(h => `<tr><td>@${esc(h.handle)}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
       ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
       <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
     const withText = $('showtext').checked; $('texth').hidden = !withText;
@@ -71,6 +73,9 @@ $('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = ''
 $('logout').onclick = act(() => post('logout'));
 $('refresh').onclick = load;
 $('showtext').onchange = load;
+const showInv = r => { $('spout').textContent = `Invite for ${r.space}: ${r.invite} (${r.maxUses} uses, expires ${when(r.expires)})`; };
+$('spcreate').onclick = act(async () => showInv(await post('spaces', { name: $('spname').value.trim() })));
+$('spaces').onclick = ev => { const n = ev.target.dataset && ev.target.dataset.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '7d' })))(); };
 $('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
 $('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));
