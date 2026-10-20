@@ -135,22 +135,24 @@ if (isMain) (async () => {
       const flag = n => { const k = args.indexOf(n); if (k < 0) return null; const v = args[k + 1]; args.splice(k, 2); return v; };
       let space = flag('--space'); const invite = flag('--invite');
       let raw = (args[0] || '').replace(/^@/, '');
-      if (!raw) { console.error('usage: relay init <handle> [--url URL] [--space <name> --invite <code>]'); process.exit(2); }
+      if (!raw) { console.error('usage: relay init <handle> [--url URL] [--invite <CODE>] [--space <name>]'); process.exit(2); }
       if (raw.includes('@')) { space ||= raw.split('@')[1]; raw = raw.split('@')[0]; }
-      space = norm(space || 'public');
+      space = space ? norm(space) : (invite ? '' : 'public'); // with --invite alone the relay resolves the space from the code
       const handle = norm(raw);
       if (handle !== raw) console.log(`Note: handles are lowercase; using @${handle} instead of @${raw}`);
-      const key = space === 'public' ? handle : handle + '@' + space;
-      const file = confPath(key);
-      const existing = readJson(file);
+      const key = !space || space === 'public' ? handle : handle + '@' + space;
+      let file = confPath(key);
+      const existing = space ? readJson(file) : null;
       if (existing && existing.token) { console.error(`${addr(key)} already has a saved identity at ${file}; not overwriting. Use it as is (--as ${key}) or pick a different handle.`); process.exit(1); }
       const known = identities().map(h => readJson(confPath(h)) || {}).find(c => c.url);
       let url = flagUrl || ENV('URL') || process.env.RELAY_URL || (known || {}).url || (readJson(LEGACY) || {}).url || DEFAULT_URL;
       url = url.replace(/\/+$/, '');
-      const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(space === 'public' ? { handle } : { handle, space, invite }) });
+      const r = await fetch(url + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(invite ? { handle, invite, ...(space && space !== 'public' ? { space } : {}) } : { handle, ...(space !== 'public' ? { space } : {}) }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { console.error('register failed: ' + (j.error || r.status)); process.exit(1); }
       fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+      file = confPath(j.handle);
+      if ((readJson(file) || {}).token) { console.error(`${addr(j.handle)} was registered, but a different saved identity already exists at ${file}; not overwriting it.`); process.exit(1); }
       fs.writeFileSync(file, JSON.stringify({ url, handle: j.handle, space: j.space || 'public', token: j.token }, null, 2), { mode: 0o600 });
       { const c0 = readJson(file); Object.defineProperty(c0, '_path', { value: file }); await ensureKeys(c0); }
       console.log(`Connected to the relay as ${addr(j.handle)}${j.space && j.space !== 'public' ? ` (space ${j.space}; inside it you are just @${handle})` : ''} (${url}). Config saved to ${file}`);
@@ -212,11 +214,11 @@ if (isMain) (async () => {
     } else if (cmd === 'space') {
       const c = need(); const sub = args.shift(), name = norm(args.shift() || '');
       const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
-      if (!name || !['create', 'invite'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 7d]'); process.exit(2); }
+      if (!name || !['create', 'invite'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 15m]'); process.exit(2); }
       const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires') });
       if (sub === 'create') console.log(`Created space ${name} (you are its owner).`);
-      console.log(`Invite code: ${j.invite}  (${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
-      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> in ${name} with invite ${j.invite}${c.url !== DEFAULT_URL ? ' at ' + c.url : ''}."`);
+      console.log(`Invite code: ${j.invite}  (space ${j.space}, ${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
+      console.log(`Give an agent this sentence: "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${j.invite}${c.url !== DEFAULT_URL ? ' at ' + c.url : ''}."`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {
@@ -236,6 +238,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 7d] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

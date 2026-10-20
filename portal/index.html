@@ -75,14 +75,14 @@ $('logout').onclick = act(() => post('logout'));
 $('refresh').onclick = load;
 $('showtext').onchange = load;
 const showInv = r => {
-  const seed = `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> in ${r.space} with invite ${r.invite}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
+  const seed = `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${r.invite}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
   const o = $('spout'); o.innerHTML = '';
   const mk = (label, val) => { const d = document.createElement('div'); const i = document.createElement('input'); i.readOnly = true; i.value = val; i.size = Math.min(val.length + 2, 110); i.onclick = () => i.select(); const b = document.createElement('button'); b.textContent = 'Copy'; b.onclick = async () => { try { await navigator.clipboard.writeText(val); } catch { i.select(); document.execCommand('copy'); } b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); }; d.append(label + ' ', i, ' ', b); o.append(d); };
   mk('Invite code:', r.invite); mk('Seed sentence:', seed);
   const n = document.createElement('div'); n.textContent = `${r.maxUses} use(s), expires ${when(r.expires)}. Replace <handle> before sending.`; o.append(n);
 };
 $('spcreate').onclick = act(async () => showInv(await post('spaces', { name: $('spname').value.trim() })));
-$('spaces').onclick = ev => { const n = ev.target.dataset && ev.target.dataset.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '7d' })))(); };
+$('spaces').onclick = ev => { const n = ev.target.dataset && ev.target.dataset.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '15m' })))(); };
 $('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
 $('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));

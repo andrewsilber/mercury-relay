@@ -54,11 +54,25 @@ $R --as smoke-b poll | grep -q "ack all" || efail "reply-all at b"
 echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged"
 # --- spaces ---
 sfail() { echo "FAIL: $*"; exit 1; }
-SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | grep -o 'acme-[a-f0-9]*' | head -1)"; [ -n "$CODE" ] || sfail "space create: $SC1"
+SC1="$($R --as smoke-a space create acme)"; CODE="$(echo "$SC1" | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; [ -n "$CODE" ] || sfail "space create: $SC1"
+echo "$CODE" | grep -q '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]\{4\}$' || sfail "code alphabet: $CODE"
+echo "$SC1" | grep -q "join as @<handle> with invite $CODE" || sfail "seed sentence: $SC1"
 OUT="$($R --as smoke-a space create admin 2>&1 || true)"; echo "$OUT" | grep -q reserved || sfail "reserved space: $OUT"
-OUT="$($R init eve --space acme --invite acme-bogus 2>&1 || true)"; echo "$OUT" | grep -q "valid invite" || sfail "bad invite: $OUT"
-$R init dana --space acme --invite "$CODE" | grep -q "space acme" || sfail "join dana"
-$R init bob@acme --invite "$CODE" >/dev/null || sfail "join bob"
+OUT="$($R init eve --invite ZZZZ 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired invite" || sfail "bad invite: $OUT"
+LC="$(echo "$CODE" | tr 'A-Z' 'a-z')"
+$R init dana --invite "$LC" | grep -q "space acme" || sfail "join dana (short code, no --space, lowercase)"
+$R init bob@acme --invite "$CODE" >/dev/null || sfail "join bob (--space form)"
+# use count + expiry
+C1="$($R --as smoke-a space invite acme | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"
+$R init uno --invite "$C1" >/dev/null || sfail "single-use invite"
+OUT="$($R init dos --invite "$C1" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || sfail "invite reused: $OUT"
+C2="$($R --as smoke-a space invite acme --expires 1s | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"; sleep 1.5
+OUT="$($R init tres --invite "$C2" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || sfail "expired invite accepted: $OUT"
+OUT="$($R --as smoke-a space invite acme --expires 48h 2>&1 || true)"; echo "$OUT" | grep -q "24h" || sfail "expiry cap: $OUT"
+# brute-force lockout (separate client IP via X-Forwarded-For)
+for i in 1 2 3 4 5; do curl -s -H 'x-forwarded-for: 10.66.0.1' -d '{"handle":"brute","invite":"ZZZZ"}' "$URL/register" >/dev/null; done
+OUT="$(curl -s -H 'x-forwarded-for: 10.66.0.1' -d "{\"handle\":\"brute\",\"invite\":\"$CODE\"}" "$URL/register")"; echo "$OUT" | grep -q "too many failed invite attempts" || sfail "no lockout: $OUT"
+curl -s -H 'x-forwarded-for: 6.6.6.6, 10.66.0.1' -d '{"handle":"brute2","invite":"ZZZZ"}' "$URL/register" | grep -q "too many failed" || sfail "lockout bypassed via spoofed leftmost XFF"
 $R init dana --url "$URL" >/dev/null || sfail "public dana (per-space uniqueness)"
 SM="space secret $RANDOM"
 $R --as dana@acme send bob "$SM" | grep -q "end-to-end encrypted" || sfail "intra-space send"
@@ -72,13 +86,15 @@ $R --as smoke-a space invite acme --uses 2 --expires 1d | grep -q "2 uses" || sf
 sleep 0.5; grep -qF "$SM" "$TMP/data.json" && sfail "space plaintext in data file"
 # migration of an old (pre-spaces) data file
 MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"
-echo "{\"handles\":{\"oldie\":{\"tokenHash\":\"$OH\",\"created\":\"2026-01-01T00:00:00Z\"}},\"queues\":{\"oldie\":[]}}" > "$TMP/old.json"
+LH="$(node -e 'console.log(require("crypto").createHash("sha256").update("legacy-0123456789ab").digest("hex"))')"
+echo "{\"handles\":{\"oldie\":{\"tokenHash\":\"$OH\",\"created\":\"2026-01-01T00:00:00Z\"}},\"queues\":{\"oldie\":[]},\"spaces\":{\"legacy\":{\"created\":\"2026-01-01T00:00:00Z\",\"owner\":null,\"invites\":{\"$LH\":{\"uses\":0,\"maxUses\":5,\"expires\":\"2099-01-01T00:00:00Z\",\"role\":\"member\"}}}}}" > "$TMP/old.json"
 (cd "$TMP" && PORT=$MP DATA_FILE="$TMP/old.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV2=$!
 for i in $(seq 50); do curl -sf "http://127.0.0.1:$MP/health" >/dev/null && break; sleep 0.1; done
 curl -s -H "authorization: Bearer $OT" "http://127.0.0.1:$MP/status" | grep -q '"space":"public"' || { kill $SRV2; sfail "migration status"; }
 curl -s -H "authorization: Bearer $OT" -d '{"to":"oldie","text":"still works"}' "http://127.0.0.1:$MP/send" | grep -q '"ok":true' || { kill $SRV2; sfail "migrated send"; }
+curl -s -d '{"handle":"lena","invite":"legacy-0123456789ab"}' "http://127.0.0.1:$MP/register" | grep -q '"handle":"lena@legacy"' || { kill $SRV2; sfail "old long invite code"; }
 kill $SRV2; sleep 0.3; grep -q '"space":"public"' "$TMP/old.json" || sfail "migration not persisted"
-echo "PASS: spaces create/invite/join, intra-space encrypted, cross-space rejected, public unaffected, private keys hidden, migration"
+echo "PASS: spaces create/invite/join, short codes (no --space, case-insensitive, single use, expiry, cap, brute-force lockout, legacy long code), intra-space encrypted, cross-space rejected, public unaffected, private keys hidden, migration"
 # --- admin ---
 fail() { echo "FAIL: $*"; exit 1; }
 curl -s "$URL/admin" | grep -q "Relay admin" || fail "admin page not served"
@@ -90,7 +106,7 @@ CK="$(echo "$SC" | grep -o 'admin_session=[a-f0-9]*')"
 A() { curl -s -H "Cookie: $CK" -H 'x-admin: 1' -H 'content-type: application/json' "$@"; }
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-a"' || fail "state lacks handles"
 A "$URL/admin/api/state" | grep -q '"space":"acme"' || fail "state lacks space column"
-A -X POST -d '{"name":"globex"}' "$URL/admin/api/spaces" | grep -q '"invite":"globex-' || fail "admin create space"
+A -X POST -d '{"name":"globex"}' "$URL/admin/api/spaces" | grep -q '"invite":"[A-Z2-9]\{4\}"' || fail "admin create space"
 A "$URL/admin/api/messages" | grep -q '"from":"smoke-a"' || fail "message log empty"
 A "$URL/admin/api/messages" | grep -qF "$MSG" && fail "message text shown without toggle"
 A "$URL/admin/api/messages?text=1" | grep -qF "$SECRET" && fail "admin log shows e2e plaintext"

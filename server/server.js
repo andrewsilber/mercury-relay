@@ -19,6 +19,8 @@ function body(req, cb, res) {
   let b = ''; req.on('data', d => { b += d; if (b.length > 1e6) req.destroy(); });
   req.on('end', () => { try { cb(JSON.parse(b || '{}')); } catch { json(res, 400, { error: 'bad json' }); } });
 }
+// Client IP: the rightmost X-Forwarded-For entry (added by the hosting proxy; leftmost entries are client-controlled).
+const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); };
 const reply = (res, r) => json(res, r.code, r.body);
 const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush });
 
@@ -38,7 +40,7 @@ http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
   if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true });
-  if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m)), res);
+  if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];
   const me = relay.auth(bearer);

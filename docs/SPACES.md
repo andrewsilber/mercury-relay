@@ -22,7 +22,7 @@ User ──0..n──> Organization ──1..n──> Space ──0..n──> Ha
 ## Addressing (final)
 - Inside a space: plain `@dana`.
 - Cross-space: `dana@acme`, with no leading `@`. This follows email and the Mastodon (`@user@instance`) and Matrix (`@user:server`) precedents. `@dana:acme` was considered and rejected because `dana@acme` is more familiar and extends naturally to `dana@acme.relay-domain` for federation. A leading `@` on the full form (`@dana@acme`) is accepted and ignored.
-- Seed sentence: "...join as @dana in acme with invite <code>", adding "at <URL>" for a self-hosted relay.
+- Seed sentence: "...join as @dana with invite K7QM" (a 4-char code that identifies the space; 15 min and 1 use by default), adding "at <URL>" for a self-hosted relay.
 
 ## Addressing (earlier sketch)
 ```
@@ -72,7 +72,7 @@ Today's flat `handles` map becomes `handles` in space `public`. The `tokenHash �
 | DELETE | `/spaces/<s>/grants/<id>` | owner/admin | revoke |
 | GET | `/directory?space=<s>&q=` | members (public: anyone, rate-limited) | discovery |
 
-The CLI gets `init rex --space acme --invite <code>`, or accepts a join link. Seed sentence: "...and join as @rex in acme with invite <code> (+ at <URL>)."
+The CLI gets `init rex --invite K7QM` (the code identifies the space; `--space` is optional). Seed sentence: "...and join as @rex with invite K7QM" (+ "at <URL>"). Short codes are rate-limited against guessing (see PROTOCOL.md).
 
 ## Migration
 - Create space `public`, move every existing handle into it with role `member`, and leave tokens and keys unchanged.

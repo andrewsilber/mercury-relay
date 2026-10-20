@@ -20,7 +20,11 @@ function parseAddr(a, defSpace) {
   if (!HANDLE_RE.test(h) || !HANDLE_RE.test(sp)) return { error: 'invalid address' };
   return { handle: h, space: sp, key: keyOf(h, sp) };
 }
-const DUR = { m: 60e3, h: 3600e3, d: 86400e3 };
+const DUR = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 };
+// Short invite codes: 4 chars, no 0/O/1/I/L; case-insensitive. 31^4 ~ 923k codes, so redemption is rate-limited.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const MAX_INVITE_MS = 24 * 3600e3;
+const FAIL_WINDOW = 10 * 60e3, FAIL_PER_IP = 5, FAIL_GLOBAL = 100;
 const ok = body => ({ code: 200, body });
 const err = (code, error) => ({ code, body: { error } });
 const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
@@ -37,16 +41,44 @@ function createRelay({ store, notifier }) {
   for (const [k, h] of Object.entries(data.handles)) if (!h.space) { const i = k.indexOf('@'); h.space = i < 0 ? PUBLIC : k.slice(i + 1); h.role ||= 'member'; }
   const spaceOf = me => (data.handles[me] || {}).space || PUBLIC;
   const canManage = (me, sp) => sp !== PUBLIC && data.spaces[sp] && (data.spaces[sp].owner === me || (spaceOf(me) === sp && ['owner', 'admin'].includes(data.handles[me].role)));
-  function newInvite(sp, by, { uses, expires, role } = {}) {
-    const code = sp + '-' + crypto.randomBytes(6).toString('hex');
-    const ms = /^(\d+)([mhd])$/.exec(String(expires || '7d')); if (!ms) return err(400, 'expires must look like 30m, 12h or 7d');
-    const maxUses = Math.floor(+uses || 1); if (!(maxUses >= 1 && maxUses <= 10000)) return err(400, 'uses must be 1-10000');
+  data.inviteSecret ||= crypto.randomBytes(32).toString('hex'); // HMAC key so 4-char codes can't be reversed from the data file
+  const normCode = c => String(c || '').trim().toUpperCase().replace(/[\s-]/g, '');
+  const codeHashes = c => { const n = normCode(c), raw = String(c || '').trim(); // short codes (HMAC) and legacy long codes (sha256 of the code as issued)
+    return n.length === 4 ? [crypto.createHmac('sha256', data.inviteSecret).update(n).digest('hex')] : [sha(raw), sha(raw.toLowerCase())]; };
+  const live = inv => inv && inv.uses < inv.maxUses && Date.parse(inv.expires) > Date.now();
+  function findInvite(code, onlySpace) {
+    const hs = codeHashes(code);
+    for (const [name, sp] of Object.entries(data.spaces)) {
+      if (onlySpace && name !== onlySpace) continue;
+      for (const h of hs) if (live((sp.invites || {})[h])) return { space: name, inv: sp.invites[h] };
+    }
+    return null;
+  }
+  function pruneInvites() { for (const sp of Object.values(data.spaces)) for (const [h, inv] of Object.entries(sp.invites || {})) if (!live(inv)) delete sp.invites[h]; }
+  function newInvite(sp, by, { uses, expires, role } = {}, defUses = 1) {
+    const ms = /^(\d+)([smhd])$/.exec(String(expires || '15m')); if (!ms) return err(400, 'expires must look like 30s, 15m, 12h or 1d');
+    const ttl = +ms[1] * DUR[ms[2]]; if (!(ttl >= 1e3 && ttl <= MAX_INVITE_MS)) return err(400, 'expires must be between 1s and 24h');
+    const maxUses = Math.floor(+uses || defUses); if (!(maxUses >= 1 && maxUses <= 1000)) return err(400, 'uses must be 1-1000');
     if (role && !['member', 'agent', 'admin'].includes(role)) return err(400, 'role must be member, agent or admin');
-    const exp = new Date(Date.now() + +ms[1] * DUR[ms[2]]).toISOString();
-    (data.spaces[sp].invites ||= {})[sha(code)] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString() };
+    pruneInvites();
+    let code;
+    for (let i = 0; i < 50; i++) { code = Array.from(crypto.randomBytes(4), b => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(''); if (!findInvite(code)) break; code = null; } // unique among live invites
+    if (!code) return err(503, 'could not allocate an invite code, try again');
+    const exp = new Date(Date.now() + ttl).toISOString();
+    (data.spaces[sp].invites ||= {})[codeHashes(code)[0]] = { uses: 0, maxUses, expires: exp, role: role || 'member', by, created: new Date().toISOString() };
     save();
     return ok({ space: sp, invite: code, maxUses, expires: exp });
   }
+  // Brute-force protection for invite redemption: per-IP and global failure windows.
+  const fails = new Map(); let globalFails = [];
+  function inviteLocked(ip) {
+    const now = Date.now(); globalFails = globalFails.filter(t => t > now - FAIL_WINDOW);
+    const f = (fails.get(ip) || []).filter(t => t > now - FAIL_WINDOW); fails.set(ip, f);
+    if (f.length >= FAIL_PER_IP) return err(429, 'too many failed invite attempts from your address; try again in ' + Math.ceil((f[0] + FAIL_WINDOW - now) / 60e3) + ' min');
+    if (globalFails.length >= FAIL_GLOBAL) return err(429, 'too many failed invite attempts on this relay; try again in a few minutes');
+    return null;
+  }
+  const inviteFailed = ip => { const now = Date.now(); (fails.get(ip) || fails.set(ip, []).get(ip)).push(now); globalFails.push(now); if (fails.size > 10000) fails.clear(); };
   const save = () => store.save();
   let seenDirty = false; // lastSeen-only changes: persisted with the next real save, or every 30 s
   setInterval(() => { if (seenDirty && !store.pending()) { seenDirty = false; save(); } }, 30000).unref();
@@ -107,20 +139,20 @@ function createRelay({ store, notifier }) {
 
   const relay = {
     data, waiters, msgLog, flush, save, flushStore, auth,
-    register(m) {
+    register(m, { ip = '' } = {}) {
       const raw = String(m.handle || '').trim().toLowerCase().replace(/^@/, '');
       const at = raw.indexOf('@'), handle = at < 0 ? raw : raw.slice(0, at);
-      const space = String(m.space || (at < 0 ? PUBLIC : raw.slice(at + 1))).toLowerCase();
+      let space = String(m.space || (at < 0 ? '' : raw.slice(at + 1))).toLowerCase();
       if (!HANDLE_RE.test(handle)) return err(400, 'handle must be 3-32 chars of a-z, 0-9, _ or -');
       if (RESERVED_HANDLES.has(handle)) return err(400, 'handle @' + handle + ' is reserved');
-      const sp = data.spaces[space];
-      if (!sp) return err(404, 'unknown space ' + space);
       let inv = null, role = 'member';
-      if (space !== PUBLIC) {
-        inv = (sp.invites || {})[sha(String(m.invite || ''))];
-        if (!inv || inv.uses >= inv.maxUses || Date.parse(inv.expires) < Date.now()) return err(403, 'joining space ' + space + ' needs a valid invite code (ask its owner)');
-        role = inv.role;
+      if (m.invite || (space && space !== PUBLIC)) {
+        const lock = inviteLocked(ip); if (lock) return lock;
+        const f = m.invite && findInvite(m.invite, space && space !== PUBLIC ? space : null); // the code alone identifies the space
+        if (!f || f.space === PUBLIC) { inviteFailed(ip); return err(403, 'invalid or expired invite code (ask the space owner for a new one)'); }
+        space = f.space; inv = f.inv; role = inv.role;
       }
+      space ||= PUBLIC;
       const key = keyOf(handle, space);
       if (data.handles[key]) return err(409, 'handle taken');
       if (inv) inv.uses++;
@@ -137,13 +169,14 @@ function createRelay({ store, notifier }) {
       if (RESERVED_SPACES.has(name)) return err(400, 'space name ' + name + ' is reserved');
       if (data.spaces[name]) return err(409, 'space taken');
       data.spaces[name] = { created: new Date().toISOString(), owner: me, invites: {} };
-      return newInvite(name, me, { uses: m.uses || 25, expires: m.expires || '7d' });
+      return newInvite(name, me, { uses: m.uses, expires: m.expires }, 5);
     },
     invite(me, name, m) {
       if (!data.spaces[name] || !canManage(me, name)) return err(403, 'only the space owner or a space admin can create invites');
       return newInvite(name, me, m);
     },
     createInviteAsOperator(name, m) { return data.spaces[name] && name !== PUBLIC ? newInvite(name, 'operator', m) : err(404, 'unknown space'); },
+    findInviteSpace(code) { const f = findInvite(code); return f ? f.space : null; },
     createSpaceAsOperator(m) { const r = relay.createSpace('operator', m); if (r.code === 200) data.spaces[r.body.space].owner = null; return r; },
     getKeys(addr, viewer) { // private-space keys are visible only to members of that space
       const a = parseAddr(addr, viewer ? spaceOf(viewer) : PUBLIC), h = a.key && data.handles[a.key];
