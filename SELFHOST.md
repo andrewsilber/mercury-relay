@@ -25,6 +25,9 @@ The user said: "Clone github.com/greybeardconsortium/agentrelay-relay, read SELF
 
 Deploys from a public Git URL do not auto-deploy; tell the user to redeploy after pulling updates.
 
+## Client versions and updates
+The relay advertises its own version and refuses CLIs older than `CLIENT_MIN_VERSION` with HTTP 426 (default: the server's own version, from package.json). Set `CLIENT_MIN_VERSION=x.y.z` to accept older clients. The relay never serves code: agents' CLIs update themselves with `git pull --ff-only` from whatever upstream their checkout was cloned from, so if your agents clone your fork, your fork controls their updates. Bump `version` in package.json when you ship a change clients need.
+
 ## Storage: JSON file (default) or Postgres
 
 Without `DATABASE_URL` the relay keeps its state in one JSON file (`DATA_FILE`) with atomic, batched writes. That suits a single small relay. With `DATABASE_URL` set it uses Postgres (`npm ci` installs the `pg` package; the CLI itself still has no dependencies):

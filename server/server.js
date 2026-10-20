@@ -31,6 +31,12 @@ function body(req, cb, res) {
 // Client IP: the rightmost X-Forwarded-For entry (added by the hosting proxy; leftmost entries are client-controlled).
 const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); };
 const reply = (res, r) => json(res, r.code, r.body);
+// Client version negotiation: every response carries X-Relay-Latest / X-Relay-Min-Client; old or unversioned CLIs get 426.
+const LATEST = require('../package.json').version;
+const MIN_DEFAULT = LATEST; // default: clients must be at least this server's own version (CLIENT_MIN_VERSION overrides)
+const MIN_CLIENT = /^\d+\.\d+\.\d+$/.test(process.env.CLIENT_MIN_VERSION || '') ? process.env.CLIENT_MIN_VERSION : MIN_DEFAULT;
+const vcmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+const clientTooOld = v => !/^\d+\.\d+\.\d+/.test(v || '') || vcmp(String(v).match(/^\d+\.\d+\.\d+/)[0], MIN_CLIENT) < 0;
 const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush, store, backup });
 
 // Authenticated routes: [method, path] -> (me, msg) => result. POST handlers get the JSON body.
@@ -48,6 +54,7 @@ const AUTHED = {
 };
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
+  res.setHeader('X-Relay-Latest', LATEST); res.setHeader('X-Relay-Min-Client', MIN_CLIENT);
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
   if (req.method === 'GET' && (u.pathname === '/preview' || u.pathname.startsWith('/preview/'))) { // static visual prototype, no auth
     if (u.pathname === '/preview') { res.writeHead(302, { Location: '/preview/' }); return res.end(); }
@@ -56,7 +63,8 @@ http.createServer((req, res) => {
     if (!f.startsWith(root + path.sep)) { res.writeHead(404); return res.end(); }
     return fs.readFile(f, (e, b) => { if (e) { res.writeHead(404); return res.end('not found'); } res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store' }); res.end(b); });
   }
-  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, version: LATEST, latest: LATEST, minClient: MIN_CLIENT, publicUrl: publicUrl(req), attachMax: relay.limits.attachMax, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (!(req.method === 'GET' && /^\/invites\//.test(u.pathname)) && clientTooOld(req.headers['x-relay-client'])) return json(res, 426, { error: 'update required', min: MIN_CLIENT, latest: LATEST, how: 'git pull in your relay checkout' });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const ivm = /^\/invites\/([^/]{1,64})$/.exec(u.pathname);
   if (req.method === 'GET' && ivm) return reply(res, relay.lookupInvite(decodeURIComponent(ivm[1]), { ip: clientIp(req) }));

@@ -10,6 +10,8 @@ ST() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then echo "DATABASE_URL=$SMOKE_DATAB
 DUMP() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then DATABASE_URL="$SMOKE_DATABASE_URL" DATABASE_SCHEMA="${RUNID}_$1" node "$ROOT/server/dump-store.js"; else cat "$TMP/$1.json"; fi; }
 if [ -n "${SMOKE_DATABASE_URL:-}" ]; then BACKEND=postgres; else BACKEND=json-file; fi; echo "storage backend: $BACKEND"
 unset MERCURY_RELAY_CONFIG MERCURY_RELAY_HANDLE MERCURY_RELAY_URL AGENTRELAY_CONFIG AGENTRELAY_HANDLE AGENTRELAY_URL RESEND_API_KEY
+VER="$(node -p "require('$ROOT/package.json').version")"
+curl() { command curl -H "X-Relay-Client: $VER" "$@"; } # raw requests act as a current client; version gating is tested explicitly below
 (cd "$TMP" && BACKUP_INTERVAL=1s BACKUP_KEEP=2 BACKUP_FIRST_DELAY_MS=200 BACKUP_DIR="$TMP/backups" INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT env $(ST data) node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
 trap 'kill $SRV $(jobs -p) 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; done
@@ -19,6 +21,16 @@ R="$TMP/r.sh"
 export AGENTRELAY_NEWER_CHECK=0 # most tests send without reading first; the newer-message check is tested explicitly below
 $R init smoke-a --url "$URL" >/dev/null
 $R init smoke-b --url "$URL" >/dev/null
+# version negotiation: headers on every response, fields in /health, 426 for missing/old client versions (except /health, GET /invites)
+H="$(command curl -s -D - -o /dev/null "$URL/health")"; echo "$H" | grep -qi "^x-relay-latest: $VER" && echo "$H" | grep -qi '^x-relay-min-client: ' || { echo "FAIL: version headers: $H"; exit 1; }
+curl -s "$URL/health" | grep -q "\"latest\":\"$VER\",\"minClient\":" || { echo "FAIL: /health version fields"; exit 1; }
+[ "$(command curl -s -o /dev/null -w '%{http_code}' -d '{"handle":"nover"}' "$URL/register")" = 426 ] || { echo "FAIL: no-version client not refused"; exit 1; }
+command curl -s -H 'X-Relay-Client: 0.1.0' -d '{"handle":"oldver"}' "$URL/register" | grep -q '"error":"update required","min":"[0-9.]*","latest":"'"$VER"'","how":"git pull' || { echo "FAIL: old client 426 body"; exit 1; }
+[ "$(command curl -s -o /dev/null -w '%{http_code}' "$URL/invites/QQQQ")" = 404 ] || { echo "FAIL: invite lookup gated by version"; exit 1; }
+OLD="$TMP/oldcli"; mkdir -p "$OLD"; cp -r "$ROOT/cli" "$ROOT/core" "$ROOT/relay.js" "$OLD/"; echo '{"version":"0.1.0"}' > "$OLD/package.json"
+OUT="$(AGENTRELAY_AUTO_UPDATE=0 node "$OLD/relay.js" --as smoke-a poll 2>&1)" && RC=0 || RC=$?; [ $RC = 4 ] && echo "$OUT" | grep -q "UPDATE REQUIRED.*Auto-update is off.*git pull" || { echo "FAIL: auto-update off path ($RC): $OUT"; exit 1; }
+OUT="$(node "$OLD/relay.js" --as smoke-a poll 2>&1)" && RC=0 || RC=$?; [ $RC = 4 ] && echo "$OUT" | grep -q "Auto-update failed (not a git clone)" || { echo "FAIL: non-git auto-update path ($RC): $OUT"; exit 1; }
+echo "PASS: version headers, 426 for old/missing client versions, auto-update off/non-git paths"
 MSG="hello from a $RANDOM"
 $R --as smoke-a send smoke-b "$MSG" >/dev/null
 OUT="$($R --as smoke-b poll)"

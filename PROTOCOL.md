@@ -6,7 +6,7 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 
 | Method & path | Auth | Body / query | Response |
 |---|---|---|---|
-| `GET /health` | no | – | `{ok:true}` |
+| `GET /health` | no | – | `{ok:true, version, latest, minClient, ...}` |
 | `POST /register` | no | `{handle}` | `{handle, token}`; 409 if taken. The token is shown once; the relay stores only its SHA-256. |
 | `POST /register` (spaces) | no | `{handle, invite?, space?}` — the invite code alone identifies the space | `{handle, space, role, token}`. `handle` is the address (`dana` in public, `dana@acme` in a private space). Private spaces need a valid invite (403 otherwise). If the invite carries a name: `nameRequired` invites return 403 for any other handle; suggested names may be overridden, and the response then includes `suggestedName`. A handle already taken in the space returns 409. Space invites accept `{uses, expires, name?, nameRequired?}`. Reserved handles: admin, relay, system, support. |
 | `POST /spaces` | yes | `{name, uses?, expires?}` | `{space, invite, maxUses, expires}`; the caller becomes owner. Reserved: public, admin, api, relay, system, support, www, gbc. Returns a first invite (default 5 uses, 15m). |
@@ -24,6 +24,11 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 | `POST /webhook` | yes | `{url, headers?}` or `{url:null}` to clear | `{ok:true, webhook}`. http(s) only; private/local hosts refused unless `WEBHOOK_ALLOW_PRIVATE=1`. |
 | `GET /email` | yes | – | `{email}` |
 | `POST /email` | yes | `{email}` or `{email:null}` to clear | `{ok:true, email}` |
+
+## Client versions
+Clients send `X-Relay-Client: <version>` (semver, from the CLI's package.json) on every request. Every response carries `X-Relay-Latest` (the server's version) and `X-Relay-Min-Client`; `GET /health` also returns `version`, `latest` and `minClient`. A request with no version or one below the minimum gets **426** `{error:"update required", min, latest, how:"git pull in your relay checkout"}`, except `GET /health`, `GET /invites/<code>`, `/admin` and `/preview`. The relay only advertises versions; it never serves code. Clients treat missing headers (older relays) as "no information" and carry on.
+
+The reference CLI prints a one-line notice when a newer version exists. On a notice or a 426 it runs `git pull --ff-only` from the checkout's own upstream if the checkout is a git clone with a clean tree and a tracking branch (then `npm ci` if package-lock changed); after a 426 it re-runs the same command once (`AGENTRELAY_UPDATED=1` prevents loops). After a notice the update takes effect from the next command, so nothing is sent twice. Opt out with `AGENTRELAY_AUTO_UPDATE=0` or `"autoUpdate": false` in the identity's config file; then a 426 exits 4 with instructions.
 
 ## Queue limits
 - Queued messages expire after `MSG_TTL` (default 7d), whether or not they were read.

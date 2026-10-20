@@ -24,6 +24,63 @@ function resolveConf() {
   return fs.existsSync(LEGACY) ? LEGACY : null;
 }
 const e2e = require('./e2e.js');
+// Version negotiation + auto-update. Every request carries X-Relay-Client; the relay answers with X-Relay-Latest / X-Relay-Min-Client
+// and refuses too-old clients with 426. A clean git clone updates itself from its own configured upstream (official repo or a fork) (git pull --ff-only) and re-runs once.
+const VERSION = require('../package.json').version;
+const REPO = path.join(__dirname, '..');
+const vcmp = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+const isVer = v => /^\d+\.\d+\.\d+$/.test(v || '');
+function autoUpdateOn() {
+  if (process.env.AGENTRELAY_AUTO_UPDATE === '0' || process.env.MERCURY_RELAY_AUTO_UPDATE === '0') return false;
+  try { const p = resolveConfQuiet(); const c = p && readJson(p); if (c && c.autoUpdate === false) return false; } catch {}
+  return true;
+}
+function resolveConfQuiet() { if (ENV('CONFIG')) return ENV('CONFIG'); if (AS) return confPath(AS); const cur = currentH(); if (cur && fs.existsSync(confPath(cur))) return confPath(cur); const ids = identities(); return ids.length === 1 ? confPath(ids[0]) : null; }
+function tryGitUpdate() { // returns '' on success, else the reason
+  const { spawnSync } = require('child_process');
+  const g = (...a) => spawnSync('git', ['-C', REPO, ...a], { encoding: 'utf8', timeout: 60000 });
+  const top = g('rev-parse', '--show-toplevel'); if (top.status !== 0) return 'not a git clone';
+  if (path.resolve(top.stdout.trim()) !== path.resolve(REPO)) return 'not a git clone';
+  if (g('status', '--porcelain', '--untracked-files=no').stdout.trim()) return 'local changes in the checkout';
+  const up = g('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'); if (up.status !== 0) return 'no upstream branch';
+  const remote = up.stdout.trim().split('/')[0], url = g('remote', 'get-url', remote).stdout.trim();
+  if (!url) return 'upstream remote has no URL';
+  const lockBefore = g('rev-parse', 'HEAD:package-lock.json').stdout.trim();
+  const pull = g('pull', '--ff-only', '-q'); if (pull.status !== 0) return 'git pull failed: ' + (pull.stderr || '').trim().split('\n')[0];
+  if (g('rev-parse', 'HEAD:package-lock.json').stdout.trim() !== lockBefore && fs.existsSync(path.join(REPO, 'node_modules'))) spawnSync('npm', ['ci', '--silent'], { cwd: REPO, stdio: 'ignore', timeout: 300000 });
+  return '';
+}
+let updateTried = false, noticeShown = false;
+function reExec() {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, AGENTRELAY_UPDATED: '1' } });
+  process.exit(r.status == null ? 1 : r.status);
+}
+function onVersions(latest, min, refused) {
+  if (refused) {
+    const how = `run \`git pull\` in ${REPO} and retry`;
+    if (!updateTried && process.env.AGENTRELAY_UPDATED !== '1' && autoUpdateOn()) {
+      updateTried = true; const why = tryGitUpdate();
+      if (!why) { console.error(`[relay] this client (${VERSION}) is too old for the relay (min ${min}); updated with git pull, re-running once.`); reExec(); }
+      console.error(`[relay] UPDATE REQUIRED: client ${VERSION} is below the relay's minimum ${min} (latest ${latest}). Auto-update failed (${why}). Fix: ${how}.`);
+    } else console.error(`[relay] UPDATE REQUIRED: client ${VERSION} is below the relay's minimum ${min} (latest ${latest}). ${autoUpdateOn() ? '' : 'Auto-update is off. '}Fix: ${how}.`);
+    process.exit(4);
+  }
+  if (isVer(latest) && vcmp(latest, VERSION) > 0 && !noticeShown) {
+    noticeShown = true;
+    if (!updateTried && process.env.AGENTRELAY_UPDATED !== '1' && autoUpdateOn()) {
+      updateTried = true; const why = tryGitUpdate();
+      if (!why) { console.error(`[relay] updated client ${VERSION} -> ${latest} with git pull; the new version is used from the next command.`); return; }
+      console.error(`[relay] update available: ${VERSION} -> ${latest} (auto-update skipped: ${why}). Run \`git pull\` in ${REPO}.`);
+    } else console.error(`[relay] update available: ${VERSION} -> ${latest}. Run \`git pull\` in ${REPO}.`);
+  }
+}
+const rawFetch = globalThis.fetch;
+globalThis.fetch = async (url, opts = {}) => {
+  const r = await rawFetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Relay-Client': VERSION } });
+  onVersions(r.headers.get('x-relay-latest'), r.headers.get('x-relay-min-client'), r.status === 426);
+  return r;
+};
 const files = require('../core/files.js');
 const FILES_DIR = path.join(DIR, 'files');
 // Addresses: "bob" = bob in my space, "bob@acme" = bob in space acme, "bob@public" = public bob. Canonical form matches the relay's keys.
