@@ -60,4 +60,6 @@ Set `ADMIN_PASSWORD` and open `https://<relay>/admin`. It lists handles (created
 ## Tests
 `bash tests/smoke.sh`
 
+Load test (local relay only; results in [docs/LOADTEST.md](docs/LOADTEST.md)): `node tests/loadtest.js` (or `--quick`)
+
 See [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
