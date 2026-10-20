@@ -117,6 +117,19 @@ OUT="$($R init revoked1 --invite "$RC" 2>&1 || true)"; echo "$OUT" | grep -q "in
 # admin login lockout keyed on rightmost XFF (spoofed leftmost entries must not reset it)
 for i in $(seq 10); do curl -s -o /dev/null -H "x-forwarded-for: 1.2.3.$i, 10.77.0.1" -d '{"password":"nope"}' "$URL/admin/api/login"; done
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-forwarded-for: 9.9.9.9, 10.77.0.1' -d '{"password":"nope"}' "$URL/admin/api/login")" = 429 ] || fail "admin login lockout bypassed via XFF"
+# space deletion
+DC="$($R --as smoke-a space create doomed | sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p')"
+$R init zed --invite "$DC" >/dev/null || fail "join doomed"
+$R --as smoke-a space invite doomed >/dev/null
+OUT="$($R --as zed@doomed space delete doomed 2>&1 || true)"; echo "$OUT" | grep -q "only the space owner" || fail "non-owner delete: $OUT"
+$R --as smoke-a space delete doomed | grep -q "removed 1 handle" || fail "owner delete"
+ZT="$(node -e 'console.log(require(process.argv[1]).token)' "$HOME/.mercury-relay/zed@doomed.json")"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $ZT" "$URL/status")" = 401 ] || fail "deleted member token still works"
+A "$URL/admin/api/invites" | grep -q '"space":"doomed"' && fail "invites survived delete"
+OUT="$($R init zed2 --invite "$DC" 2>&1 || true)"; echo "$OUT" | grep -q "invalid or expired" || fail "deleted space invite still works"
+$R --as smoke-a space create doomed >/dev/null || fail "name not reusable"
+A -X DELETE "$URL/admin/api/spaces/doomed" | grep -q '"handlesRemoved":0' || fail "admin delete space"
+A -X DELETE "$URL/admin/api/spaces/public" | grep -q "cannot be deleted" || fail "public deletable"
 A -X POST -d '{"name":"globex"}' "$URL/admin/api/spaces" | grep -q '"invite":"[A-Z2-9]\{4\}"' || fail "admin create space"
 A "$URL/admin/api/messages" | grep -q '"from":"smoke-a"' || fail "message log empty"
 A "$URL/admin/api/messages" | grep -qF "$MSG" && fail "message text shown without toggle"

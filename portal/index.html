@@ -60,7 +60,7 @@ async function load() {
     $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
     loadInvites().catch(() => {});
-    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button>`}</td></tr>`).join('');
+    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button> <button class="danger" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete</button>`}</td></tr>`).join('');
     $('handles').innerHTML = state.handles.map(h => `<tr><td>${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
       ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
       <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
@@ -92,7 +92,9 @@ const showInv = r => {
   const n = document.createElement('div'); n.textContent = `${r.maxUses} use(s), expires ${when(r.expires)}. Replace <handle> before sending.`; o.append(n);
 };
 $('spcreate').onclick = act(async () => showInv(await post('spaces', { name: $('spname').value.trim() })));
-$('spaces').onclick = ev => { const n = ev.target.dataset && ev.target.dataset.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '15m' })))(); };
+$('spaces').onclick = ev => { const d = ev.target.dataset || {};
+  if (d.delsp) { const typed = prompt(`Delete space "${d.delsp}"? This permanently removes ${d.n} handle(s) in it (their tokens, keys and queued messages) and all its invites.\n\nType the space name to confirm:`); if (typed === d.delsp) act(() => api('spaces/' + d.delsp, { method: 'DELETE' }))(); else if (typed !== null) alert('Name did not match; nothing deleted.'); return; }
+  const n = d.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '15m' })))(); };
 $('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
 $('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
 $('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));

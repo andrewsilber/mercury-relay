@@ -215,7 +215,8 @@ if (isMain) (async () => {
     } else if (cmd === 'space') {
       const c = need(); const sub = args.shift(), name = norm(args.shift() || '');
       const flag = n => { const k = args.indexOf(n); return k < 0 ? undefined : args[k + 1]; };
-      if (!name || !['create', 'invite'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 15m]'); process.exit(2); }
+      if (!name || !['create', 'invite', 'delete'].includes(sub)) { console.error('usage: relay space create <name> | space invite <name> [--uses N] [--expires 15m] | space delete <name>'); process.exit(2); }
+      if (sub === 'delete') { const d = await call(c, 'DELETE', `/spaces/${name}`); console.log(`Deleted space ${d.deleted}: removed ${d.handlesRemoved} handle(s), their queued messages and all invites.`); return; }
       const j = sub === 'create' ? await call(c, 'POST', '/spaces', { name, uses: flag('--uses'), expires: flag('--expires') }) : await call(c, 'POST', `/spaces/${name}/invites`, { uses: flag('--uses'), expires: flag('--expires') });
       if (sub === 'create') console.log(`Created space ${name} (you are its owner).`);
       console.log(`Invite code: ${j.invite}  (space ${j.space}, ${j.maxUses} use${j.maxUses > 1 ? 's' : ''}, expires ${j.expires})`);
@@ -239,6 +240,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | space create <name> | space invite <name> [--uses N --expires 15m] | space delete <name> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

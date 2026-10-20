@@ -71,6 +71,8 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
     }
     if (req.method === 'POST' && p === '/admin/api/spaces') return body(req, m => { const r = relay.createSpaceAsOperator(m); json(res, r.code, r.body); }, res);
     if (req.method === 'GET' && p === '/admin/api/invites') return json(res, 200, { invites: relay.listInvites() });
+    const ds = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})$/.exec(p);
+    if (req.method === 'DELETE' && ds) { const r = relay.deleteSpace(ds[1], null); return json(res, r.code, r.body); }
     const rv = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})\/invites\/([a-f0-9]{16})$/.exec(p);
     if (req.method === 'DELETE' && rv) { const r = relay.revokeInvite(rv[1], rv[2]); return json(res, r.code, r.body); }
     const sm = /^\/admin\/api\/spaces\/([a-z0-9_-]{3,32})\/invites$/.exec(p);

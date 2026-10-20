@@ -176,6 +176,18 @@ function createRelay({ store, notifier }) {
       return newInvite(name, me, m);
     },
     createInviteAsOperator(name, m) { return data.spaces[name] && name !== PUBLIC ? newInvite(name, 'operator', m) : err(404, 'unknown space'); },
+    deleteSpace(name, me) { // me = handle (owner/space admin) or null for the operator
+      if (name === PUBLIC) return err(400, 'the public space cannot be deleted');
+      if (!data.spaces[name]) return err(404, 'unknown space');
+      if (me !== null && !canManage(me, name)) return err(403, 'only the space owner or a space admin can delete the space');
+      const members = Object.keys(data.handles).filter(k => data.handles[k].space === name);
+      for (const k of members) {
+        for (const w of waiters[k] || []) { clearTimeout(w.timer); w.cb(410, { error: 'space deleted' }); }
+        delete waiters[k]; tokenIndex.delete(data.handles[k].tokenHash); delete data.handles[k]; delete data.queues[k]; indexedCount--;
+      }
+      delete data.spaces[name]; save();
+      return ok({ ok: true, deleted: name, handlesRemoved: members.length });
+    },
     listInvites() { // admin only: live invites
       pruneInvites(); const out = [];
       for (const [space, sp] of Object.entries(data.spaces)) for (const [id, inv] of Object.entries(sp.invites || {})) out.push({ id: id.slice(0, 16), space, code: inv.code || null, usesLeft: inv.maxUses - inv.uses, maxUses: inv.maxUses, expires: inv.expires, created: inv.created || null, role: inv.role, by: inv.by || null });
