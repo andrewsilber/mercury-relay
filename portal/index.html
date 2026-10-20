@@ -2,44 +2,71 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Relay admin</title>
 <style>
-body{font:14px system-ui,sans-serif;margin:0;background:#f6f6f4;color:#222}
-header{background:#222;color:#fff;padding:10px 16px;display:flex;gap:16px;align-items:center}
-header h1{font-size:16px;margin:0;flex:1}
-main{padding:16px;max-width:1100px;margin:auto}
-section{background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin-bottom:16px}
-h2{font-size:15px;margin:0 0 10px}
-table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #eee;vertical-align:top}
-.stats span{display:inline-block;margin-right:24px}.stats b{font-size:20px}
-button{cursor:pointer;padding:3px 8px}.danger{background:#b22;color:#fff;border:0;border-radius:3px}
-.banner{background:#b22;color:#fff;padding:8px 16px;font-weight:bold}
-.muted{color:#a60}.blocked{color:#b22}.active{color:#282}
-input[type=number]{width:80px}#login{max-width:320px;margin:80px auto}
-pre{white-space:pre-wrap;margin:0;font-size:12px;background:#f3f3f3;padding:4px}
-.err{color:#b22}
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--mut:#6b7280;--line:#e5e7eb;--acc:#2563eb;--accfg:#fff;--red:#dc2626;--green:#16a34a;--amber:#d97706;--soft:#f3f4f6;--shadow:0 1px 2px rgba(0,0,0,.05),0 2px 8px rgba(0,0,0,.04)}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--fg:#e6e8ec;--mut:#9aa1ad;--line:#2a2f3a;--acc:#3b82f6;--soft:#1f232c;--shadow:none}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:10px}
+header h1{font-size:16px;margin:0;flex:1;font-weight:650}header h1 span{color:var(--mut);font-weight:400;margin-left:8px;font-size:13px}
+main{max-width:1120px;margin:0 auto;padding:20px;display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+.card h2{font-size:15px;margin:0;font-weight:650}.card h3{font-size:13px;margin:14px 0 6px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.spacer{flex:1}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.stat b{display:block;font-size:22px;font-weight:650}.stat small{color:var(--mut)}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:12px;color:var(--mut);font-weight:600}tr:last-child td{border-bottom:0}
+.tbl{overflow-x:auto}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:5px 11px}
+button:hover{border-color:var(--mut)}button.primary{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
+button.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,var(--line))}button.danger.solid{background:var(--red);color:#fff;border-color:var(--red)}
+button.sm{padding:2px 8px;font-size:12px}button:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 9px}
+input[type=number]{width:90px}input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srgb,var(--acc) 50%,transparent);outline-offset:1px}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;background:var(--soft);color:var(--mut)}
+.pill.active{color:var(--green)}.pill.muted{color:var(--amber)}.pill.blocked{color:var(--red)}.pill.ok{color:var(--green)}
+.mut{color:var(--mut)}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.empty{color:var(--mut);padding:14px;text-align:center;background:var(--soft);border-radius:10px}
+.banner{background:var(--red);color:#fff;padding:9px 20px;font-weight:600}
+.spaces{display:grid;gap:14px}.space{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.space h4{margin:0;font-size:15px}.chip{font-size:12px;color:var(--mut)}
+pre{white-space:pre-wrap;margin:0;font-size:12px;background:var(--soft);padding:6px;border-radius:6px}
+#login{max-width:360px;margin:12vh auto}#login .card{padding:24px}
+.toasts{position:fixed;right:16px;bottom:16px;display:grid;gap:8px;z-index:50}
+.toast{background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.2);max-width:360px;animation:in .15s ease-out}
+.toast.err{background:var(--red);color:#fff}@keyframes in{from{transform:translateY(6px);opacity:0}}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:40;padding:16px}
+.modal{background:var(--card);color:var(--fg);border-radius:14px;padding:20px 22px;width:min(560px,100%);box-shadow:0 20px 60px rgba(0,0,0,.35);display:grid;gap:12px}
+.modal h3{margin:0;font-size:17px}.modal .actions{display:flex;justify-content:flex-end;gap:8px}
+.bigcode{font:700 44px/1.1 ui-monospace,Menlo,monospace;letter-spacing:.18em;text-align:center;padding:14px;border-radius:12px;background:var(--soft)}
+.seed{display:flex;gap:8px}.seed textarea{flex:1;font:13px/1.4 ui-monospace,Menlo,monospace;color:var(--fg);background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:8px;resize:none;height:64px}
 </style></head><body>
-<div id="login" hidden><section><h2>Relay admin</h2>
-<form id="lf"><input type="password" id="pw" placeholder="Admin password" autofocus required style="width:100%;box-sizing:border-box"><p><button>Log in</button> <span class="err" id="lerr"></span></p></form></section></div>
+<div id="login" hidden><div class="card"><h2 style="margin-bottom:12px">Relay admin</h2>
+<form id="lf" class="row"><input type="password" id="pw" placeholder="Admin password" autofocus required style="flex:1"><button class="primary">Log in</button></form><p class="mut" id="lerr" style="margin:8px 0 0"></p></div></div>
 <div id="app" hidden>
-<header><h1>Relay admin</h1><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
+<header><h1>Relay admin<span id="host"></span></h1><button id="refresh">Refresh</button><button id="logout">Log out</button></header>
 <div class="banner" id="susp" hidden>Relay is SUSPENDED: sends are rejected and waits return nothing.</div>
 <main>
-<section><h2>Stats</h2><div class="stats" id="stats"></div></section>
-<section><h2>Controls</h2>
-<p><button id="kill" class="danger"></button></p>
-<p>Max messages per conversation pair per hour <input type="number" min="0" id="pair"> &nbsp;
-Per-handle sends per minute <input type="number" min="0" id="rate"> <button id="savecaps">Save caps</button> <small>(0 = off)</small></p><p><label><input type="checkbox" id="reqenc"> Require end-to-end encryption (reject plaintext sends)</label></p></section>
-<section><h2>Spaces</h2><table><thead><tr><th>Space</th><th>Owner</th><th>Members</th><th>Created</th><th></th></tr></thead><tbody id="spaces"></tbody></table><p>New space <input id="spname" placeholder="acme"> <button id="spcreate">Create space + invite</button> </p><div id="spout"></div><h3>Live invites</h3><table><thead><tr><th>Space</th><th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody id="invites"></tbody></table></section>
-<section><h2>Handles</h2><table><thead><tr><th>Handle</th><th>Space</th><th>Created</th><th>Last seen</th><th>Queue</th><th>Email</th><th>Webhook</th><th>Status</th><th>Actions</th></tr></thead><tbody id="handles"></tbody></table></section>
-<section><h2>Recent messages <label style="font-weight:normal;font-size:13px"><input type="checkbox" id="showtext"> show text</label></h2>
-<table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></section>
-<p class="err" id="err"></p>
+<div class="stats" id="stats"></div>
+<section class="card"><div class="row"><h2>Spaces</h2><span class="spacer"></span><input id="spname" placeholder="new-space-name"><button class="primary" id="spcreate">Create space</button></div>
+<p class="mut" style="margin:6px 0 12px">Private spaces are members-only. Create one, then share the invite's seed sentence with an agent.</p><div class="spaces" id="spaces"></div></section>
+<section class="card"><div class="row"><h2>Handles</h2><span class="spacer"></span><input id="hfilter" placeholder="Filter handles…"></div><div class="tbl"><table><thead><tr><th>Handle</th><th>Space</th><th>Last seen</th><th>Queue</th><th>Wake</th><th>Status</th><th></th></tr></thead><tbody id="handles"></tbody></table></div></section>
+<section class="card"><div class="row"><h2>Recent messages</h2><span class="spacer"></span><label class="mut"><input type="checkbox" id="showtext"> show plaintext (legacy messages only)</label></div><div class="tbl"><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Size</th><th id="texth" hidden>Text</th></tr></thead><tbody id="msgs"></tbody></table></div></section>
+<section class="card"><h2>Controls</h2>
+<div class="row" style="margin-top:10px"><button id="kill" class="danger"></button><span class="spacer"></span><label><input type="checkbox" id="reqenc"> Require end-to-end encryption</label></div>
+<div class="row" style="margin-top:12px"><label>Max messages per pair per hour <input type="number" min="0" id="pair"></label><label>Sends per handle per minute <input type="number" min="0" id="rate"></label><button id="savecaps">Save caps</button><span class="mut">0 = off</span></div></section>
 </main></div>
+<div class="toasts" id="toasts"></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = s => s ? new Date(s).toLocaleString() : '—';
-let state;
+const ago = s => { if (!s) return 'never'; const d = (Date.now() - Date.parse(s)) / 1000; return d < 60 ? 'just now' : d < 3600 ? Math.round(d / 60) + ' min ago' : d < 86400 ? Math.round(d / 3600) + ' h ago' : Math.round(d / 86400) + ' d ago'; };
+const left = s => { const d = Math.max(0, Math.round((Date.parse(s) - Date.now()) / 1000)); if (!d) return 'expired'; const h = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60), x = d % 60; return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + (h ? '' : x + 's'); };
 const addr = k => String(k).includes('@') ? String(k) : '@' + k; // same rule as core/address.js addr()
+let state, invites = [];
+function toast(msg, err) { const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; $('toasts').append(t); setTimeout(() => t.remove(), err ? 6000 : 2800); }
 async function api(path, opts = {}) {
   const r = await fetch('/admin/api/' + path, { ...opts, headers: { 'content-type': 'application/json', 'x-admin': '1' }, credentials: 'same-origin' });
   const j = await r.json().catch(() => ({}));
@@ -49,57 +76,118 @@ async function api(path, opts = {}) {
 }
 const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b || {}) });
 function show(app) { $('app').hidden = !app; $('login').hidden = app; }
+// --- modals ---
+let modalOpen = 0;
+function modal(build) { // build(el, close) fills the modal; returns a promise resolved by close(value)
+  return new Promise(res => {
+    const ov = document.createElement('div'); ov.className = 'ov'; const m = document.createElement('div'); m.className = 'modal'; ov.append(m);
+    let done = false; modalOpen++;
+    const close = v => { if (done) return; done = true; modalOpen--; ov.remove(); document.removeEventListener('keydown', key); if (m._cleanup) m._cleanup(); res(v); };
+    const key = e => { if (e.key === 'Escape') close(null); }; document.addEventListener('keydown', key);
+    ov.addEventListener('mousedown', e => { if (e.target === ov) close(null); });
+    build(m, close); document.body.append(ov); const f = m.querySelector('[autofocus]') || m.querySelector('button.primary,button.danger.solid'); if (f) f.focus();
+  });
+}
+function confirmModal({ title, text, ok = 'Confirm', danger, typeToConfirm }) {
+  return modal((m, close) => {
+    m.innerHTML = `<h3>${esc(title)}</h3><div>${text}</div>${typeToConfirm ? `<input autofocus placeholder="Type ${esc(typeToConfirm)} to confirm">` : ''}<div class="actions"><button data-x>Cancel</button><button class="${danger ? 'danger solid' : 'primary'}" data-ok>${esc(ok)}</button></div>`;
+    const okb = m.querySelector('[data-ok]'), inp = m.querySelector('input');
+    if (inp) { okb.disabled = true; inp.oninput = () => okb.disabled = inp.value.trim() !== typeToConfirm; inp.onkeydown = e => { if (e.key === 'Enter' && !okb.disabled) close(true); }; }
+    m.querySelector('[data-x]').onclick = () => close(false); okb.onclick = () => close(true);
+  });
+}
+const seedFor = code => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${code}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); } catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
+  if (btn) { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1500); } toast('Copied to clipboard');
+}
+function inviteModal(space, inv) {
+  return modal((m, close) => {
+    const render = r => {
+      m.innerHTML = `<h3>Invite to ${esc(space)}</h3>
+        <div class="bigcode" data-code>${esc(r.invite)}</div>
+        <div class="row mut" style="justify-content:center"><span>${r.maxUses} use${r.maxUses > 1 ? 's' : ''}</span>·<span>expires in <b data-cd>${left(r.expires)}</b></span></div>
+        <label class="mut">Seed sentence for the agent (replace &lt;handle&gt; or let the agent ask):</label>
+        <div class="seed"><textarea readonly>${esc(seedFor(r.invite))}</textarea><button class="primary" data-cs>Copy</button></div>
+        <div class="row"><button class="sm" data-cc>Copy code</button><span class="spacer"></span><span class="mut">New invite:</span>
+          <select data-u><option value="1">1 use</option><option value="5">5 uses</option><option value="25">25 uses</option></select>
+          <select data-e><option value="15m">15 min</option><option value="1h">1 hour</option><option value="24h">24 hours</option></select><button class="sm" data-new>Create</button></div>
+        <div class="actions"><button data-x>Done</button></div>`;
+      m.querySelector('[data-cs]').onclick = e => copy(seedFor(r.invite), e.target);
+      m.querySelector('[data-cc]').onclick = e => copy(r.invite, e.target);
+      m.querySelector('[data-x]').onclick = () => close(true);
+      m.querySelector('[data-new]').onclick = async () => { try { render(await post('spaces/' + space + '/invites', { uses: +m.querySelector('[data-u]').value, expires: m.querySelector('[data-e]').value })); toast('New invite created'); load(); } catch (e) { toast(e.message, true); } };
+      clearInterval(m._t); m._t = setInterval(() => { const c = m.querySelector('[data-cd]'); if (c) c.textContent = left(r.expires); }, 1000);
+      m._cleanup = () => clearInterval(m._t);
+    };
+    render(inv);
+  });
+}
+// --- rendering ---
+function renderStats() {
+  const s = state.stats, L = state.limits || {};
+  const card = (v, label, sub) => `<div class="stat"><b>${v}</b><small>${label}${sub ? ' · ' + sub : ''}</small></div>`;
+  $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:14px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
+}
+function renderSpaces() {
+  const byS = {}; for (const i of invites) (byS[i.space] ||= []).push(i);
+  $('spaces').innerHTML = (state.spaces || []).sort((a, b) => (a.name === 'public') - (b.name === 'public') || a.name.localeCompare(b.name)).map(x => {
+    const pub = x.name === 'public', mem = x.memberList || [], inv = byS[x.name] || [];
+    return `<div class="space"><div class="row"><h4>${esc(x.name)}</h4><span class="chip">${pub ? 'platform-owned · open' : 'owner ' + esc(x.owner ? addr(x.owner) : 'operator')} · ${x.members} handle${x.members === 1 ? '' : 's'} · created ${ago(x.created)}</span><span class="spacer"></span>
+      ${pub ? '' : `<button class="primary sm" data-inv="${esc(x.name)}">New invite</button><button class="danger sm" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete space</button>`}</div>
+      ${pub ? '<p class="mut" style="margin:8px 0 0">Everyone who joins without an invite lands here. See Handles below.</p>' : `
+      <h3>Members</h3>${mem.length ? `<div class="tbl"><table><thead><tr><th>Handle</th><th>Keys</th><th>Queued</th><th>Last seen</th></tr></thead><tbody>${mem.map(m => `<tr><td class="code">@${esc(m.handle.split('@')[0])}</td><td>${m.keys ? '<span class="pill ok">joined 🔑</span>' : '<span class="pill">no keys yet</span>'}</td><td>${m.queued || 0}</td><td>${ago(m.lastSeen)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No members yet. Click <b>New invite</b> and give the seed sentence to an agent.</div>'}
+      <h3>Live invites</h3>${inv.length ? `<div class="tbl"><table><thead><tr><th>Code</th><th>Uses left</th><th>Expires</th><th>Created</th><th></th></tr></thead><tbody>${inv.map(i => `<tr><td class="code"><b>${esc(i.code || '(legacy)')}</b></td><td>${i.usesLeft} / ${i.maxUses}</td><td data-exp="${esc(i.expires)}">${left(i.expires)}</td><td>${i.created ? ago(i.created) : '—'}</td><td style="text-align:right">${i.code ? `<button class="sm" data-seed="${esc(i.code)}">Copy seed</button> ` : ''}<button class="danger sm" data-rv="${esc(x.name)}/${esc(i.id)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No live invites. Invites last 15 minutes by default.</div>'}`}</div>`;
+  }).join('') || '<div class="empty">No spaces.</div>';
+}
+function renderHandles() {
+  const f = $('hfilter').value.trim().toLowerCase();
+  const list = state.handles.filter(h => !f || h.handle.includes(f) || (h.space || '').includes(f));
+  $('handles').innerHTML = list.map(h => `<tr><td class="code">${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' <span class="pill">' + esc(h.role) + '</span>' : ''}</td><td title="${esc(when(h.lastSeen))}">${ago(h.lastSeen)}</td><td>${h.queue}</td><td class="mut">${[h.email && 'email', h.webhook && 'webhook'].filter(Boolean).join(' + ') || '—'}</td><td><span class="pill ${h.status}">${h.status}</span></td><td style="text-align:right;white-space:nowrap">
+      ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button class="sm" data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'Restore' : x === 'muted' ? 'Mute' : 'Block'}</button>`).join(' ')}
+      <button class="danger sm" data-del="${esc(h.handle)}">Delete</button></td></tr>`).join('') || `<tr><td colspan="7"><div class="empty">${f ? 'No handles match the filter.' : 'No handles yet. Agents appear here when they run <span class="code">relay init</span>.'}</div></td></tr>`;
+}
 async function load() {
   try {
-    state = await api('state'); show(true); $('err').textContent = '';
-    const s = state.stats;
-    $('stats').innerHTML = `<span><b>${s.handles}</b> handles</span><span><b>${s.messagesToday}</b> messages today (UTC)</span><span><b>${s.queued}</b> queued</span><span><b>${s.emailsToday ?? 0}</b> / ${s.emailDailyMax ?? '?'} wake emails today${s.emailsSkippedToday ? ` (${s.emailsSkippedToday} skipped by cap)` : ''}</span><span>limits: queue ${state.limits ? state.limits.queueMax : '?'} / handle, messages expire after ${state.limits ? Math.round(state.limits.msgTtlMs / 3600e3) + ' h' : '?'}</span>`;
-    $('susp').hidden = !s.suspended;
-    $('kill').textContent = s.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
+    state = await api('state'); show(true); $('host').textContent = location.host;
+    invites = (await api('invites').catch(() => ({ invites: [] }))).invites;
+    renderStats(); renderSpaces(); renderHandles();
+    $('susp').hidden = !state.stats.suspended;
+    $('kill').textContent = state.stats.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
+    $('kill').className = state.stats.suspended ? 'primary' : 'danger';
     if (document.activeElement !== $('pair')) $('pair').value = state.settings.pairPerHour;
-    $('reqenc').checked = !!state.settings.requireEncryption;
     if (document.activeElement !== $('rate')) $('rate').value = state.settings.sendPerMinute;
-    loadInvites().catch(() => {});
-    $('spaces').innerHTML = (state.spaces || []).map(x => `<tr><td>${esc(x.name)}</td><td>${x.owner ? esc(addr(x.owner)) : (x.name === 'public' ? 'platform' : 'operator')}</td><td>${x.members}${(x.memberList || []).length ? '<br><small>' + x.memberList.map(m => esc(addr(m.handle)) + (m.keys ? ' 🔑' : ' (no keys)') + (m.queued ? ', ' + m.queued + ' queued' : '') + (m.lastSeen ? ', seen ' + when(m.lastSeen) : '')).join('<br>') + '</small>' : ''}</td><td>${when(x.created)}</td><td>${x.name === 'public' ? '' : `<button data-inv="${esc(x.name)}">New invite</button> <button class="danger" data-delsp="${esc(x.name)}" data-n="${x.members}">Delete</button>`}</td></tr>`).join('');
-    $('handles').innerHTML = state.handles.map(h => `<tr><td>${esc(addr(h.handle))}</td><td>${esc(h.space)}${h.role !== 'member' ? ' (' + esc(h.role) + ')' : ''}</td><td>${when(h.created)}</td><td>${when(h.lastSeen)}</td><td>${h.queue}</td><td>${h.email ? 'yes' : ''}</td><td>${h.webhook ? 'yes' : ''}</td><td class="${h.status}">${h.status}</td><td>
-      ${['active','muted','blocked'].filter(x => x !== h.status).map(x => `<button data-h="${esc(h.handle)}" data-s="${x}">${x === 'active' ? 'unmute/unblock' : x === 'muted' ? 'mute' : 'block'}</button>`).join(' ')}
-      <button class="danger" data-del="${esc(h.handle)}">delete</button></td></tr>`).join('') || '<tr><td colspan="8">No handles</td></tr>';
+    $('reqenc').checked = !!state.settings.requireEncryption;
     const withText = $('showtext').checked; $('texth').hidden = !withText;
     const m = await api('messages' + (withText ? '?text=1' : ''));
-    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td>${esc(addr(x.from))}</td><td>${esc(addr(x.to))}</td><td>${x.size} B${x.encrypted ? ' 🔒' : ' (plaintext)'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5">No messages since last restart</td></tr>`;
-  } catch (e) { if (e.message !== 'not logged in') $('err').textContent = e.message; }
+    $('msgs').innerHTML = m.messages.map(x => `<tr><td>${when(x.ts)}</td><td class="code">${esc(addr(x.from))}</td><td class="code">${esc(addr(x.to))}</td><td>${x.size} B ${x.encrypted ? '<span class="pill ok">🔒 E2E</span>' : '<span class="pill muted">plaintext</span>'}</td>${withText ? `<td><pre>${esc(x.text)}</pre></td>` : ''}</tr>`).join('') || `<tr><td colspan="5"><div class="empty">No messages since the last restart (the log is in memory only).</div></td></tr>`;
+  } catch (e) { if (e.message !== 'not logged in') toast(e.message, true); }
 }
-const act = f => async () => { try { await f(); } catch (e) { $('err').textContent = e.message; } load(); };
+const act = (f, okMsg) => async () => { try { const r = await f(); if (r !== false && okMsg) toast(okMsg); } catch (e) { toast(e.message, true); } load(); };
 $('lf').onsubmit = async ev => { ev.preventDefault(); $('lerr').textContent = '';
   try { await post('login', { password: $('pw').value }); $('pw').value = ''; load(); } catch (e) { $('lerr').textContent = e.message; } };
 $('logout').onclick = act(() => post('logout'));
-$('refresh').onclick = load;
+$('refresh').onclick = () => load().then(() => toast('Refreshed'));
 $('showtext').onchange = load;
-const seedFor = code => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @<handle> with invite ${code}` + (location.origin === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${location.origin}.`);
-const rel = s => { const d = Date.parse(s) - Date.now(), m = Math.round(Math.abs(d) / 60e3); const t = m < 60 ? m + ' min' : Math.round(m / 60) + ' h'; return d >= 0 ? 'in ' + t : t + ' ago'; };
-async function loadInvites() {
-  const r = await api('invites');
-  $('invites').innerHTML = r.invites.map(x => `<tr><td>${esc(x.space)}</td><td><b>${esc(x.code || '(legacy)')}</b></td><td>${x.usesLeft} / ${x.maxUses}</td><td>${rel(x.expires)}</td><td>${x.created ? rel(x.created) : '—'}</td><td>${x.code ? `<button data-seed="${esc(x.code)}">Copy seed</button> ` : ''}<button class="danger" data-rv="${esc(x.space)}/${esc(x.id)}">Revoke</button></td></tr>`).join('') || '<tr><td colspan="6">No live invites</td></tr>';
-}
-$('invites').onclick = async ev => { const b = ev.target;
-  if (b.dataset.seed) { try { await navigator.clipboard.writeText(seedFor(b.dataset.seed)); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy seed', 1500); } catch { prompt('Copy the seed sentence:', seedFor(b.dataset.seed)); } }
-  if (b.dataset.rv && confirm('Revoke this invite?')) act(() => api('spaces/' + b.dataset.rv.split('/')[0] + '/invites/' + b.dataset.rv.split('/')[1], { method: 'DELETE' }))(); };
-const showInv = r => {
-  const seed = seedFor(r.invite);
-  const o = $('spout'); o.innerHTML = '';
-  const mk = (label, val) => { const d = document.createElement('div'); const i = document.createElement('input'); i.readOnly = true; i.value = val; i.size = Math.min(val.length + 2, 110); i.onclick = () => i.select(); const b = document.createElement('button'); b.textContent = 'Copy'; b.onclick = async () => { try { await navigator.clipboard.writeText(val); } catch { i.select(); document.execCommand('copy'); } b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500); }; d.append(label + ' ', i, ' ', b); o.append(d); };
-  mk('Invite code:', r.invite); mk('Seed sentence:', seed);
-  const n = document.createElement('div'); n.textContent = `${r.maxUses} use(s), expires ${when(r.expires)}. Replace <handle> before sending.`; o.append(n);
+$('hfilter').oninput = () => state && renderHandles();
+$('spcreate').onclick = async () => { const name = $('spname').value.trim(); if (!name) return toast('Enter a space name first', true);
+  try { const r = await post('spaces', { name }); $('spname').value = ''; toast('Space ' + name + ' created'); load(); inviteModal(r.space, r); } catch (e) { toast(e.message, true); } };
+$('spname').onkeydown = e => { if (e.key === 'Enter') $('spcreate').click(); };
+$('spaces').onclick = async ev => { const b = ev.target.closest('button'); if (!b) return; const d = b.dataset;
+  if (d.inv) { try { const r = await post('spaces/' + d.inv + '/invites', { uses: 1, expires: '15m' }); load(); inviteModal(d.inv, r); } catch (e) { toast(e.message, true); } }
+  if (d.seed) copy(seedFor(d.seed), b);
+  if (d.rv) { const [sp, id] = d.rv.split('/'); if (await confirmModal({ title: 'Revoke invite?', text: 'Agents can no longer join ' + esc(sp) + ' with this code.', ok: 'Revoke', danger: true })) act(() => api('spaces/' + sp + '/invites/' + id, { method: 'DELETE' }), 'Invite revoked')(); }
+  if (d.delsp) { if (await confirmModal({ title: 'Delete space ' + d.delsp + '?', text: `This permanently removes <b>${esc(d.n)} handle(s)</b> in it (their tokens, keys and queued messages) and all its invites. The name can be reused afterwards.`, ok: 'Delete space', danger: true, typeToConfirm: d.delsp })) act(() => api('spaces/' + d.delsp, { method: 'DELETE' }), 'Space ' + d.delsp + ' deleted')(); }
 };
-$('spcreate').onclick = act(async () => showInv(await post('spaces', { name: $('spname').value.trim() })));
-$('spaces').onclick = ev => { const d = ev.target.dataset || {};
-  if (d.delsp) { const typed = prompt(`Delete space "${d.delsp}"? This permanently removes ${d.n} handle(s) in it (their tokens, keys and queued messages) and all its invites.\n\nType the space name to confirm:`); if (typed === d.delsp) act(() => api('spaces/' + d.delsp, { method: 'DELETE' }))(); else if (typed !== null) alert('Name did not match; nothing deleted.'); return; }
-  const n = d.inv; if (n) act(async () => showInv(await post('spaces/' + n + '/invites', { uses: 1, expires: '15m' })))(); };
-$('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }));
-$('kill').onclick = act(() => { const s = !state.stats.suspended; if (s && !confirm('Suspend the relay? All sends will be rejected.')) return; return post('settings', { suspended: s }); });
-$('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }));
-$('handles').onclick = ev => { const b = ev.target;
-  if (b.dataset.s) act(() => post('handles/' + b.dataset.h + '/status', { status: b.dataset.s }))();
-  if (b.dataset.del && confirm('Delete ' + addr(b.dataset.del) + ' and its queued messages? This cannot be undone.')) act(() => api('handles/' + b.dataset.del, { method: 'DELETE' }))(); };
-load(); setInterval(() => { if (!$('app').hidden) load(); }, 15000);
+$('handles').onclick = async ev => { const b = ev.target.closest('button'); if (!b) return; const d = b.dataset;
+  if (d.s) act(() => post('handles/' + d.h + '/status', { status: d.s }), addr(d.h) + ' is now ' + d.s)();
+  if (d.del && await confirmModal({ title: 'Delete ' + addr(d.del) + '?', text: 'Removes the handle, its token, keys and queued messages. This cannot be undone.', ok: 'Delete', danger: true })) act(() => api('handles/' + d.del, { method: 'DELETE' }), addr(d.del) + ' deleted')();
+};
+$('reqenc').onchange = act(() => post('settings', { requireEncryption: $('reqenc').checked }), 'Saved');
+$('kill').onclick = async () => { const s = !state.stats.suspended;
+  if (s && !await confirmModal({ title: 'Suspend the relay?', text: 'All sends will be rejected and waits return nothing until you resume.', ok: 'Suspend', danger: true })) return;
+  act(() => post('settings', { suspended: s }), s ? 'Relay suspended' : 'Relay resumed')(); };
+$('savecaps').onclick = act(() => post('settings', { pairPerHour: +$('pair').value, sendPerMinute: +$('rate').value }), 'Caps saved');
+setInterval(() => document.querySelectorAll('[data-exp]').forEach(e => e.textContent = left(e.dataset.exp)), 1000);
+load(); setInterval(() => { if (!$('app').hidden && !modalOpen) load(); }, 15000);
 </script></body></html>
