@@ -154,11 +154,15 @@ function inviteModal(space, inv) {
   });
 }
 // --- rendering ---
+const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : n >= 1e3 ? (n / 1e3).toFixed(1) + ' KB' : (n || 0) + ' B';
+const storageCard = () => { const st = state.storage; if (!st) return '<div class="stat"><b>…</b><small>storage</small></div>';
+  const name = st.backend === 'postgres' ? 'Postgres' : st.backend === 'json-file' ? 'JSON file' : esc(st.backend);
+  return `<div class="stat" title="${st.backend === 'postgres' ? 'schema ' + esc(st.schema) + ' · single instance' : 'data file'}${st.messageLog ? ' · admin log ' + st.messageLog.entries + '/' + st.messageLog.max : ''}${st.lastError ? ' · last error: ' + esc(st.lastError) : ''}"><b>${fmtBytes(st.bytes)}</b><small>storage · ${name}${st.lastError ? ' · <span style="color:var(--red)">write error</span>' : ''}</small></div>`; };
 function renderStats() {
   const s = state.stats, L = state.limits || {};
   $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
   const card = (v, label, sub) => `<div class="stat"><b>${v}</b><small>${label}${sub ? ' · ' + sub : ''}</small></div>`;
-  $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:13px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
+  $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:13px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + storageCard() + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
   $('n-spaces').textContent = (state.spaces || []).length; $('n-handles').textContent = s.handles; $('n-invites').textContent = invites.length; $('n-messages').textContent = s.messagesLogged ?? '';
 }
 const pager = (el, total, off, set) => { const pages = Math.max(1, Math.ceil(total / PER)), cur = Math.floor(off / PER) + 1;
@@ -210,9 +214,9 @@ function setTab(t, push) {
 }
 async function load() {
   try {
-    state = await api('state?lite=1'); show(true); $('host').textContent = location.host;
+    const prevSt = state && state.storage; state = await api('state?lite=1'); state.storage = prevSt; show(true); $('host').textContent = location.host;
     invites = (await api('invites').catch(() => ({ invites: [] }))).invites;
-    renderStats();
+    renderStats(); api('storage').then(st => { state.storage = st; renderStats(); }).catch(() => {});
     $('susp').hidden = !state.stats.suspended;
     $('kill').textContent = state.stats.suspended ? 'Resume relay' : 'Suspend relay (kill switch)';
     $('kill').className = (state.stats.suspended ? 'primary' : 'danger') + ' sm';

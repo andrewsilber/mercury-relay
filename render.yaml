@@ -3,13 +3,15 @@ services:
     name: agentrelay
     runtime: node
     plan: starter
-    buildCommand: echo no build
+    buildCommand: npm ci --omit=dev --no-audit --no-fund  # installs pg (only used when DATABASE_URL is set)
     startCommand: node server.js
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: DATA_FILE
         value: /var/data/data.json
+      # Optional Postgres instead of the JSON file: create a Render Postgres and set DATABASE_URL to its Internal Database URL
+      # (then the disk below is no longer needed). Import existing data once with: node server/migrate-file-to-pg.js /var/data/data.json
       - key: RESEND_API_KEY
         sync: false
       - key: ADMIN_PASSWORD

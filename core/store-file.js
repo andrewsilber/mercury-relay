@@ -4,7 +4,11 @@ const fs = require('fs');
 module.exports = function createFileStore({ file, saveMs = 200 } = {}) {
   let data = null, timer = null, dirty = false;
   const store = {
-    file,
+    backend: 'json-file', file,
+    async init() { return store; },
+    drain() { return Promise.resolve(); },
+    async close() { store.flush(); },
+    async info() { let bytes = 0; try { bytes = fs.statSync(file).size; } catch {} return { backend: 'json-file', file, bytes }; },
     load() {
       try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { data = {}; }
       return data;

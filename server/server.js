@@ -1,21 +1,23 @@
 const publicUrl = require('./public-url');
 // Self-host wrapper: one relay-core instance + HTTP API + /admin portal.
 const http = require('http'), fs = require('fs'), path = require('path');
-const { createRelay, createFileStore, createNotifier } = require('../core');
+const { createRelay, createFileStore, createPgStore, createNotifier } = require('../core');
 const PORT = process.env.PORT || 8787;
 const HOST = process.env.HOST || '127.0.0.1';
 const DATA_FILE = process.env.DATA_FILE || './data.json';
 let RESEND_KEY = process.env.RESEND_API_KEY || '';
 if (!RESEND_KEY) { for (const d of [process.cwd(), path.join(__dirname, '..'), __dirname]) { try { RESEND_KEY = fs.readFileSync(path.join(d, '.resend-key'), 'utf8').trim(); break; } catch {} } }
 
-const store = createFileStore({ file: DATA_FILE, saveMs: +process.env.SAVE_MS || 200 });
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const store = DATABASE_URL ? createPgStore({ url: DATABASE_URL, schema: process.env.DATABASE_SCHEMA || 'public', saveMs: +process.env.SAVE_MS || 200 }) : createFileStore({ file: DATA_FILE, saveMs: +process.env.SAVE_MS || 200 });
+(async () => { await store.init();
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
-const limits = { msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
+const limits = { adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
 // Flush pending writes on deploy/restart so nothing is lost.
 const flushOnExit = () => { try { relay.flushStore(); } catch (e) { console.error('final save failed: ' + e.message); } };
-process.on('exit', flushOnExit);
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { flushOnExit(); process.exit(0); });
+process.on('exit', flushOnExit); // sync path (file store); Postgres writes are drained in the signal handler below
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { flushOnExit(); Promise.race([store.close(), new Promise(r => setTimeout(r, 8000))]).catch(e => console.error('final save failed: ' + e.message)).finally(() => process.exit(0)); });
 
 function json(res, code, obj) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); }
 function body(req, cb, res) {
@@ -25,7 +27,7 @@ function body(req, cb, res) {
 // Client IP: the rightmost X-Forwarded-For entry (added by the hosting proxy; leftmost entries are client-controlled).
 const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); return x.length ? x[x.length - 1] : String(req.socket.remoteAddress || ''); };
 const reply = (res, r) => json(res, r.code, r.body);
-const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush });
+const admin = require('./admin.js')({ relay, data: relay.data, save: relay.save, json, body, waiters: relay.waiters, msgLog: relay.msgLog, flush: relay.flush, store });
 
 // Authenticated routes: [method, path] -> (me, msg) => result. POST handlers get the JSON body.
 const AUTHED = {
@@ -69,4 +71,5 @@ http.createServer((req, res) => {
     return reply(res, route(me));
   }
   json(res, 404, { error: 'not found' });
-}).listen(PORT, HOST, () => console.log(`relay listening on ${HOST}:${PORT}, data in ${DATA_FILE}`));
+}).listen(PORT, HOST, () => console.log(`relay listening on ${HOST}:${PORT}, storage: ${DATABASE_URL ? 'postgres (schema ' + store.schema + ')' : 'json file ' + DATA_FILE}`));
+})().catch(e => { console.error('startup failed: ' + e.message); process.exit(1); });

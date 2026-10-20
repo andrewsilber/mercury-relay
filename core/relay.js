@@ -33,7 +33,7 @@ const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
 function createRelay({ store, notifier, limits = {} }) {
-  const L = { wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const L = { adminLogMax: Math.max(1, Math.floor(+limits.adminLogMax || 1000)), wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
   const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
   data.handles ||= {}; data.queues ||= {};
@@ -136,7 +136,7 @@ function createRelay({ store, notifier, limits = {} }) {
   }
   function logMsg(msg) {
     msgLog.push({ id: msg.id, from: msg.from, to: msg.to, ts: msg.ts, encrypted: !!msg.enc, size: msg.enc ? Buffer.byteLength(msg.enc.ct, 'base64') - 16 : Buffer.byteLength(msg.text), text: msg.enc ? '(end-to-end encrypted)' : msg.text });
-    if (msgLog.length > 500) msgLog.shift();
+    while (msgLog.length > L.adminLogMax) msgLog.shift();
     const day = msg.ts.slice(0, 10);
     if (data.stats.day !== day) data.stats = { day, count: 0 };
     data.stats.count++;

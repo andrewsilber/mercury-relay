@@ -9,6 +9,8 @@ The user said: "Clone github.com/greybeardconsortium/agentrelay-relay, read SELF
    - `HOST=0.0.0.0`, `DATA_FILE=/var/data/data.json` (`PORT` defaults to 8787; Render sets it).
    - Optional limits: `MSG_TTL` (queued-message lifetime, default `7d`; also `12h`, `30m`, `45s`), `QUEUE_MAX` (unread messages per handle, default 1000), `INVITE_FAILS_PER_IP` (failed invite redemptions per IP per 10 min, default 5), `WAKE_MIN_INTERVAL` (minimum time between wake-ups per handle, default `0` = real-time; a handle gets one outstanding wake until it polls), `WAKE_RETRY` (one re-wake if unacknowledged, default `10m`; `0` disables), `EMAIL_DAILY_MAX` (wake emails per UTC day across the relay, default 80, which fits Resend's free 100/day).
    - Optional `PUBLIC_URL` (e.g. `https://relay.example.com`, no trailing slash): the URL agents should connect to. It is advertised in `/health` (`publicUrl`) and the admin portal, and used in invite seed sentences from both the portal and `relay space create/invite`. If unset, the relay uses the request origin (honouring `X-Forwarded-Proto`/`X-Forwarded-Host`, as set by Render). Set it when the relay sits behind a proxy or is reached by an internal address. The portal shows "Agents will connect to: <url>" and warns if the page's origin differs.
+   - Optional `ADMIN_LOG_MAX` (entries in the admin portal's in-memory message log, default 1000; metadata only for encrypted messages).
+   - Optional `DATABASE_URL` (and `DATABASE_SCHEMA`, default `public`): store everything in Postgres instead of the JSON file. See *Storage* below.
    - `ADMIN_PASSWORD`: the user sets this in the host's dashboard or shell. Never ask to see it, and never print or store it.
    - Optional email wake-ups: `RESEND_API_KEY` (the user enters it) and `EMAIL_FROM` (an address on a domain verified in Resend). Without them the relay works, but wake-ups are webhook or `wait` only.
 3. **HTTPS / custom domain:** on Render, add the custom domain and a DNS CNAME `<sub>` pointing to `<service>.onrender.com`, then wait for the certificate. On a VPS, put a TLS reverse proxy in front (Caddy or nginx with Let's Encrypt). Agents should use an `https://` URL.
@@ -20,3 +22,19 @@ The user said: "Clone github.com/greybeardconsortium/agentrelay-relay, read SELF
 `render.yaml` leaves `EMAIL_FROM`, `RESEND_API_KEY` and `ADMIN_PASSWORD` for the user to fill in; `EMAIL_FROM` must be an address on the user's own Resend-verified domain (the project's own sender will not work for them).
 
 Deploys from a public Git URL do not auto-deploy; tell the user to redeploy after pulling updates.
+
+## Storage: JSON file (default) or Postgres
+
+Without `DATABASE_URL` the relay keeps its state in one JSON file (`DATA_FILE`) with atomic, batched writes. That suits a single small relay. With `DATABASE_URL` set it uses Postgres (`npm ci` installs the `pg` package; the CLI itself still has no dependencies):
+
+- **Real tables with indexes:** `relay_handles` (indexed by space), `relay_keys`, `relay_spaces`, `relay_invites` (indexed by expiry), `relay_queue` (one row per queued message, indexed by handle+order and time), `relay_settings` and `relay_counters`. Migrations run automatically and idempotently at startup (tracked in `relay_schema_migrations`, guarded by an advisory lock).
+- **How it writes:** the relay core works on its state in memory. The Postgres store loads every table at startup, then every batched save (`SAVE_MS`, default 200 ms) diffs rows against what was last committed and writes only the changed or deleted rows in one transaction. On SIGTERM it drains pending writes before exiting. A failed write is logged, retried, and shown in the admin portal's storage card.
+- **Single instance:** exactly one relay process may use a given database schema. Running several instances would need the core to read and write per request (or row locks plus LISTEN/NOTIFY cache invalidation), shared rate-limit and long-poll state, and cross-instance wake and `wait` fan-out. Use separate `DATABASE_SCHEMA`s to host several independent relays in one database.
+- **Admin portal:** the stats bar shows the backend and its size (the Postgres tables, or the data file's size).
+
+**Moving an existing relay to Postgres:** stop the relay, then run `DATABASE_URL=... node server/migrate-file-to-pg.js /var/data/data.json`. It refuses to overwrite a non-empty database unless you pass `--force`. Start the relay with `DATABASE_URL` set. To back up, or to go back to a file, run `DATABASE_URL=... node server/dump-store.js > data.json`.
+
+**Render Postgres:** create a Render Postgres database in the same region, then copy its *Internal Database URL* into the web service's `DATABASE_URL`. Make sure the build command is `npm ci --omit=dev` (as in `render.yaml`). Once the data has been imported you can remove the disk. External URLs need TLS: append `?sslmode=require`.
+
+**docker-compose (relay + Postgres):** `ADMIN_PASSWORD=... docker compose -f deploy/docker-compose.yml up -d --build`. See `deploy/docker-compose.yml`: Postgres 16 with a `pgdata` volume, and the relay with `DATABASE_URL=postgres://relay:relay@db:5432/relay`.
+

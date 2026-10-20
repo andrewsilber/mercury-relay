@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const SESSION_MS = 12 * 3600e3;
-module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flush }) {
+module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flush, store }) {
   const PW = process.env.ADMIN_PASSWORD || '';
   const sessions = new Map(); // token -> expiry ms
   const attempts = new Map(); // ip -> [ms]
@@ -68,6 +68,10 @@ module.exports = function ({ relay, data, save, json, body, waiters, msgLog, flu
       if (q) list = list.filter(m => m.from.includes(q) || m.to.includes(q) || (withText && typeof m.text === 'string' && m.text.toLowerCase().includes(q)));
       const { page, total, offset, limit } = paged(list, u);
       return json(res, 200, { total, offset, limit, messages: page.map(m => withText ? m : { id: m.id, from: m.from, to: m.to, ts: m.ts, size: m.size, encrypted: m.encrypted }) });
+    }
+    if (req.method === 'GET' && p === '/admin/api/storage') {
+      if (!store || !store.info) return json(res, 200, { backend: 'unknown' });
+      return store.info().then(i => { delete i.file; json(res, 200, { ...i, messageLog: { entries: msgLog.length, max: relay.limits.adminLogMax } }); }, e => json(res, 500, { error: 'storage info failed: ' + e.message }));
     }
     if (req.method === 'GET' && p === '/admin/api/handles') { // ?q&space&limit&offset
       const q = String(u.searchParams.get('q') || '').toLowerCase(), sp = u.searchParams.get('space');

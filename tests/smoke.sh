@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; PORT=$((20000 + RANDOM % 20000)); URL="http://127.0.0.1:$PORT"
 export HOME="$TMP/home"; mkdir -p "$HOME"
+# Storage backend: JSON files by default; set SMOKE_DATABASE_URL to run the same suite against Postgres (one schema per server).
+RUNID="s$$_$RANDOM"
+ST() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then echo "DATABASE_URL=$SMOKE_DATABASE_URL DATABASE_SCHEMA=${RUNID}_$1"; else echo "DATA_FILE=$TMP/$1.json"; fi; }
+DUMP() { if [ -n "${SMOKE_DATABASE_URL:-}" ]; then DATABASE_URL="$SMOKE_DATABASE_URL" DATABASE_SCHEMA="${RUNID}_$1" node "$ROOT/server/dump-store.js"; else cat "$TMP/$1.json"; fi; }
+if [ -n "${SMOKE_DATABASE_URL:-}" ]; then BACKEND=postgres; else BACKEND=json-file; fi; echo "storage backend: $BACKEND"
 unset MERCURY_RELAY_CONFIG MERCURY_RELAY_HANDLE MERCURY_RELAY_URL AGENTRELAY_CONFIG AGENTRELAY_HANDLE AGENTRELAY_URL RESEND_API_KEY
-(cd "$TMP" && INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT DATA_FILE="$TMP/data.json" node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
+(cd "$TMP" && INVITE_FAILS_PER_IP=20 ADMIN_PASSWORD=smoke-admin-pw PORT=$PORT env $(ST data) node "$ROOT/server.js" >"$TMP/server.log" 2>&1) & SRV=$!
 trap 'kill $SRV $(jobs -p) 2>/dev/null; rm -rf "$TMP"' EXIT
 for i in $(seq 50); do curl -sf "$URL/health" >/dev/null && break; sleep 0.1; done
 # Wrapper logs all CLI output so we can check address formatting at the end.
@@ -28,8 +33,8 @@ echo "PASS: register, send, poll, ack, wait"
 efail() { echo "FAIL: $*"; exit 1; }
 SECRET="e2e secret $RANDOM$RANDOM"
 SO="$($R --as smoke-a send smoke-b "$SECRET")"; echo "$SO" | grep -q "end-to-end encrypted" || efail "send not encrypted: $SO"
-sleep 0.5; grep -qF "$SECRET" "$TMP/data.json" && efail "plaintext found in relay data file"
-grep -q '"priv"' "$TMP/data.json" && efail "private key on relay"
+sleep 0.5; DUMP data | grep -qF "$SECRET" && efail "plaintext found in relay data file"
+DUMP data | grep -q '"priv"' && efail "private key on relay"
 curl -sf "$URL/keys/smoke-a" | grep -q '"ed25519"' || efail "GET /keys"
 OUT="$($R --as smoke-b poll)"; echo "$OUT" | grep -qF "$SECRET" || efail "decrypt: $OUT"
 echo "$OUT" | grep -qE "NOT VERIFIED|UNENCRYPTED|COULD NOT" && efail "verify: $OUT"
@@ -90,10 +95,10 @@ OUT="$($R --as dana@acme members)"; echo "$OUT" | grep -q "@bob  joined (keys pu
 $R --as smoke-a members acme | grep -q "bob@acme" || sfail "owner members view"
 OUT="$($R --as dana members 2>&1 || true)"; echo "$OUT" | grep -q "no member list" || sfail "public members: $OUT"
 OUT="$($R --as smoke-g members acme 2>&1 || true)"; echo "$OUT" | grep -q "only members" || sfail "outsider members: $OUT"
-sleep 0.5; grep -qF "$SM" "$TMP/data.json" && sfail "space plaintext in data file"
+sleep 0.5; DUMP data | grep -qF "$SM" && sfail "space plaintext in data file"
 # queue limits: separate relay with short TTL and small cap
 QP=$((PORT + 2)); QU="http://127.0.0.1:$QP"
-(cd "$TMP" && MSG_TTL=2s QUEUE_MAX=3 PORT=$QP DATA_FILE="$TMP/q.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV3=$!
+(cd "$TMP" && MSG_TTL=2s QUEUE_MAX=3 PORT=$QP env $(ST q) node "$ROOT/server.js" >/dev/null 2>&1) & SRV3=$!
 for i in $(seq 50); do curl -sf "$QU/health" >/dev/null && break; sleep 0.1; done
 curl -s "$QU/health" | grep -q '"queueMax":3' && curl -s "$QU/health" | grep -q '"msgTtlSeconds":2' || { kill $SRV3; sfail "limits not in /health"; }
 $R init qqa --url "$QU" >/dev/null; $R init qqb --url "$QU" >/dev/null; $R init qqc --url "$QU" >/dev/null
@@ -107,7 +112,7 @@ echo "PASS: queue cap (429 per recipient), message TTL expiry, limits in /health
 # wake-up coalescing + daily email cap (fake Resend + webhook receiver)
 RP=$((PORT + 3)); WP=$((PORT + 4)); WU="http://127.0.0.1:$WP"
 node -e 'const fs=require("fs");require("http").createServer((q,r)=>{let b="";q.on("data",c=>b+=c).on("end",()=>{fs.appendFileSync(process.argv[2],q.url+" "+(q.headers.authorization||"-")+" "+b+"\n");if(q.url==="/email"&&fs.existsSync(process.argv[3])){r.statusCode=500;return r.end("down")}r.end("{}")})}).listen(+process.argv[1],"127.0.0.1")' "$RP" "$TMP/hits.log" "$TMP/email-down" & RCV=$!
-(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_MIN_INTERVAL=8s EMAIL_DAILY_MAX=1 RESEND_API_KEY=test EMAIL_FROM=relay@test.invalid RESEND_API_URL="http://127.0.0.1:$RP/email" PORT=$WP DATA_FILE="$TMP/w.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV4=$!
+(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_MIN_INTERVAL=8s EMAIL_DAILY_MAX=1 RESEND_API_KEY=test EMAIL_FROM=relay@test.invalid RESEND_API_URL="http://127.0.0.1:$RP/email" PORT=$WP env $(ST w) node "$ROOT/server.js" >/dev/null 2>&1) & SRV4=$!
 for i in $(seq 50); do curl -sf "$WU/health" >/dev/null && break; sleep 0.1; done
 touch "$TMP/hits.log"
 $R init wka --url "$WU" >/dev/null; $R init wkb --url "$WU" >/dev/null
@@ -128,7 +133,7 @@ grep '^/hook' "$TMP/hits.log" | grep -q 'w[0-9]' && sfail "webhook payload conta
 kill $SRV4
 # wake mode email-then-webhook: webhook only when email can't be sent
 FP=$((PORT + 5)); FU="http://127.0.0.1:$FP"; : > "$TMP/hits.log"
-(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_MIN_INTERVAL=0 EMAIL_DAILY_MAX=2 RESEND_API_KEY=test EMAIL_FROM=relay@test.invalid RESEND_API_URL="http://127.0.0.1:$RP/email" PORT=$FP DATA_FILE="$TMP/f.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV5=$!
+(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_MIN_INTERVAL=0 EMAIL_DAILY_MAX=2 RESEND_API_KEY=test EMAIL_FROM=relay@test.invalid RESEND_API_URL="http://127.0.0.1:$RP/email" PORT=$FP env $(ST f) node "$ROOT/server.js" >/dev/null 2>&1) & SRV5=$!
 for i in $(seq 50); do curl -sf "$FU/health" >/dev/null && break; sleep 0.1; done
 $R init fba --url "$FU" >/dev/null; $R init fbb --url "$FU" >/dev/null
 $R --as fbb wake --email fbb@test.invalid --webhook "http://127.0.0.1:$RP/hook" --webhook-key k2 | grep -q "wake mode: email-then-webhook" || sfail "default wake mode"
@@ -141,7 +146,7 @@ $R --as fba send fbb "e3" >/dev/null; sleep 0.5; [ "$(cnt email)" = 2 ] && [ "$(
 kill $SRV5
 # real-time wakes: default interval 0 (immediate after a poll) + one retry if unacknowledged
 GP=$((PORT + 6)); GU="http://127.0.0.1:$GP"; : > "$TMP/hits.log"
-(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_RETRY=3s PORT=$GP DATA_FILE="$TMP/g.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV6=$!
+(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_RETRY=3s PORT=$GP env $(ST g) node "$ROOT/server.js" >/dev/null 2>&1) & SRV6=$!
 for i in $(seq 50); do curl -sf "$GU/health" >/dev/null && break; sleep 0.1; done
 curl -s "$GU/health" | grep -q '"wakeMinIntervalSeconds":0' || sfail "default WAKE_MIN_INTERVAL not 0"
 $R init rta --url "$GU" >/dev/null; $R init rtb --url "$GU" >/dev/null
@@ -160,12 +165,13 @@ echo "PASS: wake coalescing (pending until poll, min interval, deferred wake wit
 MP=$((PORT + 1)); OT=deadbeef$RANDOM; OH="$(node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' "$OT")"
 LH="$(node -e 'console.log(require("crypto").createHash("sha256").update("legacy-0123456789ab").digest("hex"))')"
 echo "{\"handles\":{\"oldie\":{\"tokenHash\":\"$OH\",\"created\":\"2026-01-01T00:00:00Z\"}},\"queues\":{\"oldie\":[]},\"spaces\":{\"legacy\":{\"created\":\"2026-01-01T00:00:00Z\",\"owner\":null,\"invites\":{\"$LH\":{\"uses\":0,\"maxUses\":5,\"expires\":\"2099-01-01T00:00:00Z\",\"role\":\"member\"}}}}}" > "$TMP/old.json"
-(cd "$TMP" && PORT=$MP DATA_FILE="$TMP/old.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV2=$!
+if [ -n "${SMOKE_DATABASE_URL:-}" ]; then DATABASE_URL="$SMOKE_DATABASE_URL" DATABASE_SCHEMA="${RUNID}_old" node "$ROOT/server/migrate-file-to-pg.js" "$TMP/old.json" >/dev/null || sfail "migrate-file-to-pg"; fi
+(cd "$TMP" && PORT=$MP env $(ST old) node "$ROOT/server.js" >/dev/null 2>&1) & SRV2=$!
 for i in $(seq 50); do curl -sf "http://127.0.0.1:$MP/health" >/dev/null && break; sleep 0.1; done
 curl -s -H "authorization: Bearer $OT" "http://127.0.0.1:$MP/status" | grep -q '"space":"public"' || { kill $SRV2; sfail "migration status"; }
 curl -s -H "authorization: Bearer $OT" -d '{"to":"oldie","text":"still works"}' "http://127.0.0.1:$MP/send" | grep -q '"ok":true' || { kill $SRV2; sfail "migrated send"; }
 curl -s -d '{"handle":"lena","invite":"legacy-0123456789ab"}' "http://127.0.0.1:$MP/register" | grep -q '"handle":"lena@legacy"' || { kill $SRV2; sfail "old long invite code"; }
-kill $SRV2; sleep 0.3; grep -q '"space":"public"' "$TMP/old.json" || sfail "migration not persisted"
+kill $SRV2; sleep 0.3; DUMP old | grep -q '"space":"public"' || sfail "migration not persisted"
 echo "PASS: spaces create/invite/join, short codes (no --space, case-insensitive, single use, expiry, cap, brute-force lockout, legacy long code), intra-space encrypted, cross-space rejected, public unaffected, private keys hidden, migration"
 # --- admin ---
 fail() { echo "FAIL: $*"; exit 1; }
@@ -226,7 +232,9 @@ $R --as smoke-c send smoke-a "c 1" >/dev/null || fail "first rate-limited send"
 OUT="$($R --as smoke-c send smoke-a "c 2" 2>&1 || true)"; echo "$OUT" | grep -q "rate limit" || fail "rate limit: $OUT"
 A -X DELETE "$URL/admin/api/handles/smoke-b" | grep -q '"deleted":"smoke-b"' || fail "delete"
 A "$URL/admin/api/state" | grep -q '"handle":"smoke-b"' && fail "handle still listed after delete"
-sleep 0.5; grep -q '"suspended":false' "$TMP/data.json" && grep -q '"sendPerMinute":1' "$TMP/data.json" || fail "settings not persisted"
+sleep 0.5; D="$(DUMP data)"; echo "$D" | grep -q '"suspended":false' && echo "$D" | grep -q '"sendPerMinute":1' || fail "settings not persisted"
+A "$URL/admin/api/storage" | grep -q "\"backend\":\"$BACKEND\"" || fail "storage info"
+A "$URL/admin/api/storage" | grep -q '"max":1000' || fail "message log cap not reported"
 grep -q "dana@acme" "$TMP/cli-output.log" || { echo "FAIL: output log not captured"; exit 1; }
 grep -E '@[a-z0-9_-]+@' "$TMP/cli-output.log" && { echo "FAIL: CLI printed a double-@ address (above)"; exit 1; }
 echo "PASS: no double-@ addresses in CLI output"

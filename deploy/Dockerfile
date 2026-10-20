@@ -1,6 +1,8 @@
 # Build from the repo root: docker build -f deploy/Dockerfile -t agentrelay .
 FROM node:20-alpine
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY server.js ./
 COPY core/ ./core/
 COPY server/ ./server/

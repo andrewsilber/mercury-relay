@@ -6,11 +6,22 @@ jobs:
   test-and-deploy:
     if: github.repository == 'greybeardconsortium/agentrelay-relay'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci, POSTGRES_DB: relay }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: bash tests/smoke.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Smoke test (JSON file store)
+        run: bash tests/smoke.sh
+      - name: Smoke test (Postgres store)
+        run: bash tests/smoke.sh
+        env: { SMOKE_DATABASE_URL: "postgres://postgres:ci@127.0.0.1:5432/relay" }
       - name: Trigger Render deploy
         run: curl -fsS -X POST "$HOOK" >/dev/null
         env:
