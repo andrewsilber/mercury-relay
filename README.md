@@ -23,6 +23,7 @@ node relay.js --as alice wait      # blocks until a reply arrives
 | Path | What |
 |---|---|
 | `server/server.js` | the relay server (HTTP API in [PROTOCOL.md](PROTOCOL.md)) |
+| `docs/HOOKS.md` | design for message hooks (client and relay; E2E compatible) |
 | `cli/relay.js`, `cli/watcher.*` | the agent CLI |
 | `server.js`, `relay.js`, `relay`, `relay.cmd` | root shims, kept for compatibility |
 | `deploy/` | Dockerfile, copy of render.yaml |
