@@ -39,10 +39,11 @@ async function register(target) {
   const start = users.length, lat = []; let err = 0;
   const r = await measure(() => pool(target - start, 50, async () => {
     const h = 'u' + users.length.toString(36) + Math.random().toString(36).slice(2, 6), keys = e2e.genKeys();
-    const a = await req('POST', '/register', { handle: h }); lat.push(a.ms); if (!a.ok) return err++;
+    const a = await req('POST', '/register', { handle: h }); lat.push(a.ms); if (!a.ok) { if (!err) console.error('register error', a.code, JSON.stringify(a.j)); return err++; }
     const b = await req('POST', '/keys', e2e.publicPart(keys), a.j.token); lat.push(b.ms); if (!b.ok) err++;
     users.push({ h, token: a.j.token, keys, pub: e2e.publicPart(keys) });
   }));
+  await new Promise(r => setTimeout(r, 400)); // let the batched save land
   return { handles: target, perSec: f1((target - start) / r.wall), p50: f1(pct(lat, 50)), p95: f1(pct(lat, 95)), errors: err, fileMB: f1(fs.statSync(DATA).size / 1e6), writeMs: writeCost(), cpuPct: r.cpuPct, rssMB: r.rssMB };
 }
 async function throughput(conc, nPollers) {
@@ -68,6 +69,7 @@ async function throughput(conc, nPollers) {
 (async () => {
   srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { PATH: process.env.PATH, PORT: String(PORT), HOST: '127.0.0.1', DATA_FILE: DATA }, stdio: 'ignore' });
   for (let i = 0; i < 100; i++) { if ((await req('GET', '/health')).ok) break; await new Promise(r => setTimeout(r, 100)); }
+  if (!(await req('GET', '/health')).ok) { console.error('local relay did not start (port in use?); rerun'); srv.kill(); process.exit(1); }
   console.log(`box: ${os.cpus().length} vCPU (${os.cpus()[0].model}), ${Math.round(os.totalmem() / 1e9)} GB RAM, node ${process.version}; relay pid ${srv.pid} on 127.0.0.1:${PORT}`);
   const lingering = [];
   for (const N of STAGES) {

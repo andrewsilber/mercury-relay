@@ -20,26 +20,42 @@ const B64 = /^[A-Za-z0-9+/=]{1,200000}$/;
 function validKey(k, len) { return typeof k === 'string' && B64.test(k) && Buffer.from(k, 'base64').length === len; } // SPKI DER: x25519/ed25519 = 44 bytes
 function validEnc(e) { return e && typeof e === 'object' && e.v === 1 && validKey(e.epk, 44) && typeof e.nonce === 'string' && B64.test(e.nonce) && typeof e.ct === 'string' && B64.test(e.ct) && typeof e.sig === 'string' && B64.test(e.sig); }
 data.stats ||= { day: '', count: 0 };
-function save() {
+// Batched, atomic persistence: save() schedules a write at most every SAVE_MS; saveNow() writes immediately.
+// Pending data is flushed on SIGTERM/SIGINT/exit so deploys don't lose messages.
+const SAVE_MS = +process.env.SAVE_MS || 200;
+let saveTimer = null, dirty = false;
+function saveNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  dirty = false;
   const tmp = DATA_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data));
   fs.renameSync(tmp, DATA_FILE);
 }
+function save() { dirty = true; if (!saveTimer) saveTimer = setTimeout(saveNow, SAVE_MS); }
+let seenDirty = false; // lastSeen-only changes: persisted with the next real save, or every 30 s
+setInterval(() => { if (seenDirty && !saveTimer) { seenDirty = false; save(); } }, 30000).unref();
+function flushOnExit() { if (dirty || seenDirty || saveTimer) { try { saveNow(); } catch (e) { console.error('final save failed: ' + e.message); } } }
+process.on('exit', flushOnExit);
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { flushOnExit(); process.exit(0); });
 const waiters = {}; // handle -> [{res, timer}]
 function json(res, code, obj) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); }
 function body(req, cb, res) {
   let b = ''; req.on('data', d => { b += d; if (b.length > 1e6) req.destroy(); });
   req.on('end', () => { try { cb(JSON.parse(b || '{}')); } catch { json(res, 400, { error: 'bad json' }); } });
 }
+// token hash -> handle index. Tokens are hashed (SHA-256) before lookup, so lookup timing reveals nothing useful about the token.
+const tokenIndex = new Map(); let indexedCount = -1;
+function reindex() { tokenIndex.clear(); for (const [name, v] of Object.entries(data.handles)) if (v.tokenHash) tokenIndex.set(v.tokenHash, name); indexedCount = Object.keys(data.handles).length; }
 function authed(req) { // returns handle for the bearer token, or null
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   if (!m) return null;
   const h = sha(m[1]);
-  for (const [name, v] of Object.entries(data.handles)) {
-    const a = Buffer.from(v.tokenHash), b = Buffer.from(h);
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return name;
-  }
-  return null;
+  let name = tokenIndex.get(h);
+  if (!name && indexedCount !== Object.keys(data.handles).length) { reindex(); name = tokenIndex.get(h); } // handles added/removed elsewhere
+  if (!name) return null;
+  const v = data.handles[name];
+  if (!v || v.tokenHash !== h) { tokenIndex.delete(h); return null; } // deleted or token rotated
+  return name;
 }
 const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 function badHost(hn) { // basic SSRF guard
@@ -73,7 +89,7 @@ function flush(h) {
   waiters[h] = [];
   for (const x of w) { clearTimeout(x.timer); json(x.res, 200, { messages: q }); }
 }
-function seen(h) { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); save(); } }
+function seen(h) { if (data.handles[h]) { data.handles[h].lastSeen = new Date().toISOString(); seenDirty = true; } }
 // --- admin state (in-memory) ---
 const msgLog = []; // ring buffer of recent messages
 const sendTimes = {}; // handle -> [ms]
@@ -112,6 +128,7 @@ http.createServer((req, res) => {
       const token = crypto.randomBytes(32).toString('hex');
       data.handles[handle] = { tokenHash: sha(token), created: new Date().toISOString() };
       data.queues[handle] = [];
+      tokenIndex.set(data.handles[handle].tokenHash, handle); indexedCount++;
       save();
       json(res, 200, { handle, token });
     }, res);
