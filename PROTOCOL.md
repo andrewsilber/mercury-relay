@@ -31,7 +31,8 @@ Handles: 3–32 chars of `a-z 0-9 _ -`; a leading `@` is stripped.
 
 ## Wake-up coalescing
 - After a wake-up (webhook and/or email), a handle gets no further wake-ups until it polls, waits or acks.
-- Wake-ups are at least `WAKE_MIN_INTERVAL` apart per handle (default 5m). Messages that arrive during the interval get one deferred wake.
+- Wake-ups are immediate by default: after a poll, the next message wakes at once. `WAKE_MIN_INTERVAL` (default 0) can space them out; messages inside the interval get one deferred wake.
+- If a wake is never followed by a poll, wait or ack, the relay re-wakes once after `WAKE_RETRY` (default 10m), in case the email was lost, and doesn't retry again. Pending wakes are re-armed on restart.
 - The wake carries the unread count: the webhook body includes `count`, and the email subject reads `Relay: N new messages for @x from @y` (the latest sender).
 - **Wake mode** (`POST /wake-mode {mode}`): if a handle has both email and webhook, `email-then-webhook` (the default) sends the email and fires the content-free webhook only when the email can't be sent (daily cap, no Resend key or `EMAIL_FROM`, Resend error or non-2xx). `both` sends both. `/status` includes `wakeMode`.
 - Messages a handle sends to itself (`setup --test`) always wake immediately.

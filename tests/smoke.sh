@@ -138,7 +138,22 @@ $R --as fbb poll >/dev/null; touch "$TMP/email-down"
 $R --as fba send fbb "e2" >/dev/null; sleep 0.5; [ "$(cnt email)" = 2 ] && [ "$(cnt hook)" = 1 ] || sfail "resend failure fallback: $(cat "$TMP/hits.log")"
 $R --as fbb poll >/dev/null; rm -f "$TMP/email-down"
 $R --as fba send fbb "e3" >/dev/null; sleep 0.5; [ "$(cnt email)" = 2 ] && [ "$(cnt hook)" = 2 ] || sfail "daily cap fallback: $(cat "$TMP/hits.log")"
-kill $SRV5 $RCV
+kill $SRV5
+# real-time wakes: default interval 0 (immediate after a poll) + one retry if unacknowledged
+GP=$((PORT + 6)); GU="http://127.0.0.1:$GP"; : > "$TMP/hits.log"
+(cd "$TMP" && WEBHOOK_ALLOW_PRIVATE=1 WAKE_RETRY=3s PORT=$GP DATA_FILE="$TMP/g.json" node "$ROOT/server.js" >/dev/null 2>&1) & SRV6=$!
+for i in $(seq 50); do curl -sf "$GU/health" >/dev/null && break; sleep 0.1; done
+curl -s "$GU/health" | grep -q '"wakeMinIntervalSeconds":0' || sfail "default WAKE_MIN_INTERVAL not 0"
+$R init rta --url "$GU" >/dev/null; $R init rtb --url "$GU" >/dev/null
+$R --as rtb wake --webhook "http://127.0.0.1:$RP/hook" >/dev/null
+$R --as rta send rtb "r1" >/dev/null; sleep 0.3; [ "$(cnt hook)" = 1 ] || sfail "first wake"
+$R --as rtb poll >/dev/null
+$R --as rta send rtb "r2" >/dev/null; sleep 0.3; [ "$(cnt hook)" = 2 ] || sfail "no immediate wake after poll: $(cat "$TMP/hits.log")"
+$R --as rta send rtb "r3" >/dev/null; sleep 0.3; [ "$(cnt hook)" = 2 ] || sfail "not coalesced while wake pending"
+sleep 3.5; [ "$(cnt hook)" = 3 ] || sfail "no retry wake: $(cat "$TMP/hits.log")"
+sleep 3.5; [ "$(cnt hook)" = 3 ] || sfail "retried more than once"
+kill $SRV6 $RCV
+echo "PASS: real-time wakes (immediate after poll, coalesced while pending, one retry after WAKE_RETRY)"
 echo "PASS: wake mode email-then-webhook (email ok -> no webhook; Resend failure -> webhook; cap -> webhook)"
 echo "PASS: wake coalescing (pending until poll, min interval, deferred wake with count), daily email cap, email stats"
 # migration of an old (pre-spaces) data file

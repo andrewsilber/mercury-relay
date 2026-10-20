@@ -33,7 +33,7 @@ const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
 function createRelay({ store, notifier, limits = {} }) {
-  const L = { wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 5 * 60e3, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const L = { wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
   const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
   data.handles ||= {}; data.queues ||= {};
@@ -118,7 +118,7 @@ function createRelay({ store, notifier, limits = {} }) {
     data.queues[h] = q.filter(m => Date.parse(m.ts) >= cut); if (data.queues[h].length !== n) save();
   }
   setInterval(() => { for (const h of Object.keys(data.queues)) expire(h); }, Math.min(60e3, Math.max(1e3, L.msgTtlMs / 2))).unref();
-  const seen = h => { const x = data.handles[h]; if (x) { x.lastSeen = new Date().toISOString(); seenDirty = true; if (x.wakePending) { x.wakePending = false; save(); } } }; // any poll/wait/ack re-arms wake-ups
+  const seen = h => { const x = data.handles[h]; if (x) { x.lastSeen = new Date().toISOString(); seenDirty = true; if (x.wakePending) { x.wakePending = false; save(); } clearTimeout(retryTimers[h]); delete retryTimers[h]; } }; // any poll/wait/ack re-arms wake-ups
 
   const msgLog = [], sendTimes = {}, pairTimes = {};
   const recent = (arr, win, now) => { while (arr.length && arr[0] <= now - win) arr.shift(); return arr; };
@@ -147,10 +147,17 @@ function createRelay({ store, notifier, limits = {} }) {
   const today = () => new Date().toISOString().slice(0, 10);
   const emailDay = () => { if (data.emailStats.day !== today()) data.emailStats = { day: today(), sent: 0, skipped: 0 }; return data.emailStats; };
   const wakeTimers = {};
-  function fireWake(to, msg) {
+  const retryTimers = {};
+  for (const h of Object.values(data.handles)) delete h.wakePending; // timers don't survive restarts; re-arm everyone
+  function fireWake(to, msg, isRetry) {
     const h = data.handles[to]; if (!h) return;
     const count = (data.queues[to] || []).length; if (!count) return;
     h.wakePending = true; h.lastWakeAt = new Date().toISOString(); save();
+    clearTimeout(retryTimers[to]); delete retryTimers[to];
+    if (!isRetry && L.wakeRetryMs > 0) { // one safety re-wake if this wake is never followed by a poll (e.g. lost email)
+      retryTimers[to] = setTimeout(() => { delete retryTimers[to]; const x = data.handles[to]; if (x && x.wakePending) { console.log('re-waking ' + to + ' (previous wake unacknowledged)'); fireWake(to, msg, true); } }, L.wakeRetryMs);
+      retryTimers[to].unref && retryTimers[to].unref();
+    }
     const rec = kind => st => { const x = data.handles[to]; if (x) { x['last' + kind + 'At'] = new Date().toISOString(); x['last' + kind + 'Status'] = st; save(); } };
     const info = { count };
     const mode = h.wakeMode || 'email-then-webhook';

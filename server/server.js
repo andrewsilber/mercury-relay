@@ -9,7 +9,7 @@ if (!RESEND_KEY) { for (const d of [process.cwd(), path.join(__dirname, '..'), _
 
 const store = createFileStore({ file: DATA_FILE, saveMs: +process.env.SAVE_MS || 200 });
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
-const limits = { msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 5 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
+const limits = { msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
 // Flush pending writes on deploy/restart so nothing is lost.
 const flushOnExit = () => { try { relay.flushStore(); } catch (e) { console.error('final save failed: ' + e.message); } };
@@ -42,7 +42,7 @@ const AUTHED = {
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return admin(req, res, u);
-  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
+  if (req.method === 'GET' && u.pathname === '/health') return json(res, 200, { ok: true, limits: { msgTtlSeconds: relay.limits.msgTtlMs / 1000, queueMax: relay.limits.queueMax, wakeMinIntervalSeconds: relay.limits.wakeMinIntervalMs / 1000, wakeRetrySeconds: relay.limits.wakeRetryMs / 1000, emailDailyMax: relay.limits.emailDailyMax }, emailsToday: relay.emailStats().sent, emailsSkippedToday: relay.emailStats().skipped });
   if (req.method === 'POST' && u.pathname === '/register') return body(req, m => reply(res, relay.register(m, { ip: clientIp(req) })), res);
   const km = /^\/keys\/(.+)$/.exec(u.pathname);
   const bearer = (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1];
