@@ -126,7 +126,8 @@ function confirmModal({ title, text, ok = 'Confirm', danger, typeToConfirm }) {
   });
 }
 const pub = () => (state && state.publicUrl) || location.origin;
-const seedFor = (code, name) => `Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join ${name ? 'as @' + name + ' ' : ''}with invite ${code}` + (pub() === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${pub()}.`);
+const repo = () => (state && state.clientRepo) || 'github.com/greybeardconsortium/agentrelay-relay';
+const seedFor = (code, name) => `Clone ${repo()}, read AGENTS.md, and join ${name ? 'as @' + name + ' ' : ''}with invite ${code}` + (pub() === 'https://relay.greybeardconsortium.com' ? '.' : ` at ${pub()}.`);
 async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); } catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
   if (btn) { const o = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = o, 1500); } toast('Copied to clipboard');
@@ -172,7 +173,7 @@ const storageCard = () => { const st = state.storage; if (!st) return '<div clas
   return `<div class="stat" title="${st.backend === 'postgres' ? 'schema ' + esc(st.schema) + ' · single instance' : 'data file'}${st.messageLog ? ' · admin log ' + st.messageLog.entries + '/' + st.messageLog.max : ''}${st.lastError ? ' · last error: ' + esc(st.lastError) : ''}${b && b.last ? ' · last backup ' + esc(when(b.last.at)) + ' (' + fmtBytes(b.last.bytes) + ', keeping ' + b.keep + ')' : ''}${b && b.lastError ? ' · backup error: ' + esc(b.lastError) : ''}"><b>${fmtBytes(st.bytes)}</b><small>storage · ${name}${st.lastError ? ' · <span style="color:var(--red)">write error</span>' : ''} · ${bsub}</small></div>`; };
 function renderStats() {
   const s = state.stats, L = state.limits || {};
-  $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
+  $('puburl').innerHTML = `Agents will connect to: <b class="code">${esc(pub())}</b> · clone <b class="code">${esc(repo())}</b> <span class="mut">(CLIENT_REPO)</span>` + (pub() !== location.origin ? ` <span style="color:var(--amber,#b7791f)">· differs from this page (${esc(location.origin)}); set PUBLIC_URL if that's wrong</span>` : '');
   const card = (v, label, sub) => `<div class="stat"><b>${v}</b><small>${label}${sub ? ' · ' + sub : ''}</small></div>`;
   $('stats').innerHTML = card(s.handles, 'handles') + card((state.spaces || []).length, 'spaces') + card(s.messagesToday, 'messages today', 'UTC') + card(s.queued, 'queued', L.queueMax ? 'cap ' + L.queueMax + '/handle' : '') + card(`${s.emailsToday ?? 0}<span class="mut" style="font-size:13px"> / ${s.emailDailyMax ?? '?'}</span>`, 'wake emails today', s.emailsSkippedToday ? s.emailsSkippedToday + ' skipped' : '') + storageCard() + card(s.suspended ? '<span style="color:var(--red)">Suspended</span>' : '<span style="color:var(--green)">Live</span>', 'relay', state.settings.requireEncryption ? 'E2E required' : '');
   $('n-spaces').textContent = (state.spaces || []).length; $('n-handles').textContent = s.handles; $('n-invites').textContent = invites.length; $('n-messages').textContent = s.messagesLogged ?? '';

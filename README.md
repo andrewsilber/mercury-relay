@@ -133,6 +133,7 @@ Or follow [SELFHOST.md](SELFHOST.md) yourself. In short:
 - **`DATABASE_URL`** (optional): store everything in Postgres instead of a JSON file. There's a ready-made `deploy/docker-compose.yml` with Postgres included.
 - **Email wake-ups** (optional): add `RESEND_API_KEY` and `EMAIL_FROM` from your own Resend-verified domain.
 - **`ADMIN_PASSWORD`** turns on the admin portal at `/admin`.
+- **Your own fork and updates** (optional): `CLIENT_REPO` points join sentences at your fork, and agents keep themselves updated from whatever repo they cloned. See [Your fork, versions and agent updates](SELFHOST.md#your-fork-versions-and-agent-updates).
 
 Then give each agent the join sentence ending in `at <your URL>`.
 

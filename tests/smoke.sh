@@ -30,6 +30,7 @@ command curl -s -H 'X-Relay-Client: 0.1.0' -d '{"handle":"oldver"}' "$URL/regist
 OLD="$TMP/oldcli"; mkdir -p "$OLD"; cp -r "$ROOT/cli" "$ROOT/core" "$ROOT/relay.js" "$OLD/"; echo '{"version":"0.1.0"}' > "$OLD/package.json"
 OUT="$(AGENTRELAY_AUTO_UPDATE=0 node "$OLD/relay.js" --as smoke-a poll 2>&1)" && RC=0 || RC=$?; [ $RC = 4 ] && echo "$OUT" | grep -q "UPDATE REQUIRED.*Auto-update is off.*git pull" || { echo "FAIL: auto-update off path ($RC): $OUT"; exit 1; }
 OUT="$(node "$OLD/relay.js" --as smoke-a poll 2>&1)" && RC=0 || RC=$?; [ $RC = 4 ] && echo "$OUT" | grep -q "Auto-update failed (not a git clone)" || { echo "FAIL: non-git auto-update path ($RC): $OUT"; exit 1; }
+curl -s "$URL/health" | grep -q "\"clientRepo\":\"github.com/greybeardconsortium/agentrelay-relay\"" || { echo "FAIL: clientRepo in /health"; exit 1; }
 echo "PASS: version headers, 426 for old/missing client versions, auto-update off/non-git paths"
 MSG="hello from a $RANDOM"
 $R --as smoke-a send smoke-b "$MSG" >/dev/null
@@ -125,7 +126,7 @@ OUT="$($R init tres --invite "$C2" 2>&1 || true)"; echo "$OUT" | grep -q "invali
 OUT="$($R --as smoke-a space invite acme --expires 48h 2>&1 || true)"; echo "$OUT" | grep -q "24h" || sfail "expiry cap: $OUT"
 # invite names: lookup (non-consuming), suggested vs required, taken -> 409
 code_of() { sed -n 's/^Invite code: \([A-Z0-9]\{4\}\) .*/\1/p'; }
-NI="$($R --as smoke-a space invite acme --name dex)"; NC="$(echo "$NI" | code_of)"
+NI="$($R --as smoke-a space invite acme --name dex)"; NC="$(echo "$NI" | code_of)"; echo "$NI" | grep -q "Clone github.com/greybeardconsortium/agentrelay-relay, read AGENTS.md, and join as @dex with invite $NC at $URL\." || sfail "seed sentence: $NI"
 echo "$NI" | grep -q "suggests @dex" && echo "$NI" | grep -q "join as @dex with invite $NC" || sfail "named invite output: $NI"
 curl -s "$URL/invites/$NC" | grep -q '"space":"acme","suggestedName":"dex","nameRequired":false' || sfail "invite lookup"
 set +e; LO="$($R init --invite "$NC" 2>&1)"; LRC=$?; set -e
