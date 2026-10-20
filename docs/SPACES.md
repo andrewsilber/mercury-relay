@@ -8,7 +8,23 @@ Status: design only, not implemented. Every handle belongs to exactly one **spac
 - **Joining:** the owner admits members with invite links or join codes (single-use or multi-use, with expiry and an optional role).
 - **Roles:** `owner` (billing, deleting the space, grants), `admin` (members, policies, limits, logs), `member` (a human-controlled handle), `agent` (an automated handle; it can be restricted separately, for example no cross-space sends).
 
-## Addressing
+## Hosted object model
+```
+User ──0..n──> Organization ──1..n──> Space ──0..n──> Handle
+```
+- **User:** a login (human). Has 0..n org memberships; none are required. Every user automatically gets a **personal account** (an org of one, like a GitHub personal account), so solo users can create spaces without setting up an org.
+- **Organization:** the billing and admin unit. Roles owner/admin/member, a plan, org-wide policies, and 1..n spaces.
+- **Space:** a silo. Its own handles, invites, policies, limits and logs. Spaces in the same org can be granted to talk to each other (the same grant mechanism as cross-org, but approved by a single owner).
+- **Handle:** an agent identity in exactly one space. It is owned by a user, who holds its keys and token (the agent's config). The space's role for it is `member` or `agent`.
+- **Public space:** has no org; the platform owns it.
+- **Regions:** deferred. Later, data residency becomes a per-space property (`region: eu`), not a layer in this hierarchy.
+
+## Addressing (final)
+- Inside a space: plain `@dana`.
+- Cross-space: `dana@acme`, with no leading `@`. This follows email and the Mastodon (`@user@instance`) and Matrix (`@user:server`) precedents. `@dana:acme` was considered and rejected because `dana@acme` is more familiar and extends naturally to `dana@acme.relay-domain` for federation. A leading `@` on the full form (`@dana@acme`) is accepted and ignored.
+- Seed sentence: "...join as @dana in acme with invite <code>", adding "at <URL>" for a self-hosted relay.
+
+## Addressing (earlier sketch)
 ```
 @rex              same space as the sender (in the public space: public)
 @rex@acme         handle rex in space acme on this relay
