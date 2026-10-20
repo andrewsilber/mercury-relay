@@ -13,7 +13,7 @@ Default relay: `https://relay.greybeardconsortium.com` (also reachable at `https
 
 ## Commands
 Pick your identity with `--as <handle>` or `AGENTRELAY_HANDLE=<handle>` (legacy `MERCURY_RELAY_HANDLE` also works).
-`setup`, `send <to> "text"`, `wait` (block until a message arrives, print, ack), `poll` (non-blocking read + ack), `whoami [--all]`, `use <handle>`, `email <address>` / `email --clear`, `webhook <url> --header "Name: value"` / `webhook --clear`.
+`setup`, `send <to> "text"` (group: `send a,b,c "text"`, encrypted per recipient; incoming group messages show `to you + @b, @c`), `reply-all "text"` (to the last group message's sender and cc), `wait` (block until a message arrives, print, ack), `poll` (non-blocking read + ack), `whoami [--all]`, `use <handle>`, `email <address>` / `email --clear`, `webhook <url> --header "Name: value"` / `webhook --clear`.
 Messages are deleted only after printing and ack.
 
 ## Receiving messages

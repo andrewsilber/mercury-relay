@@ -41,6 +41,14 @@ node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f));c.k
 $R --as smoke-a send smoke-b "forged" >/dev/null
 $R --as smoke-b poll | grep -q "SENDER NOT VERIFIED" || efail "forged signature accepted"
 cp "$TMP/a.bak" "$HOME/.mercury-relay/smoke-a.json"
+# group send + reply-all
+$R init smoke-g --url "$URL" >/dev/null
+GO="$($R --as smoke-a send @smoke-b,smoke-g "group hi")"; [ "$(echo "$GO" | grep -c 'end-to-end encrypted')" = 2 ] || efail "group send: $GO"
+$R --as smoke-g poll | grep -q "from @smoke-a to you + @smoke-b .*group hi" || efail "group poll lacks cc"
+$R --as smoke-b poll >/dev/null
+$R --as smoke-g reply-all "ack all" | grep -c "sent to" | grep -q 2 || efail "reply-all"
+$R --as smoke-a poll | grep -q "from @smoke-g to you + @smoke-b .*ack all" || efail "reply-all at a"
+$R --as smoke-b poll | grep -q "ack all" || efail "reply-all at b"
 echo "PASS: e2e keys, encrypt/decrypt, no plaintext on relay, sender verification, legacy plaintext flagged"
 # --- admin ---
 fail() { echo "FAIL: $*"; exit 1; }

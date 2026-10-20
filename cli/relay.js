@@ -48,7 +48,9 @@ async function openMsg(c, m) {
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
-    return `[relay] from @${m.from} at ${m.ts} [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
+    const others = r.cc.filter(h => h !== c.handle && h !== m.from);
+    if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others }; saveConf(c); }
+    return `[relay] from @${m.from}${others.length ? ' to you + ' + others.map(h => '@' + h).join(', ') : ''} at ${m.ts} [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}`;
   } catch (e) { return `[relay] from @${m.from} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
@@ -177,12 +179,21 @@ if (isMain) (async () => {
           console.log('\nSent a test message to yourself (id ' + j.id + '). Expect: your agent should wake within ~10s and report a message from yourself (@' + c.handle + '). If nothing happens, check the routine is on and the URL/header are right. Run `node relay.js poll` to clear the test message afterwards.');
         }
       } else if (c) nextSteps(c);
-    } else if (cmd === 'send') {
-      const c = need(); const to = (args.shift() || '').replace(/^@/, ''); const text = args.join(' ');
-      if (!to || !text) { console.error('usage: relay send <to> <text>'); process.exit(2); }
-      await ensureKeys(c); const pk = await peerKeys(c, to);
-      const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to, enc: e2e.encrypt(text, c.handle, to, pk, c.keys) } : { to, text });
-      console.log(`sent to @${to} (id ${j.id})${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : '@' + to + ' has no key yet') + ']'}`);
+    } else if (cmd === 'send' || cmd === 'reply-all') {
+      const c = need(); let list, text;
+      if (cmd === 'send') { list = (args.shift() || '').split(',').map(norm).filter(Boolean); text = args.join(' '); }
+      else { const g = c.lastGroup; if (!g) { console.error('no group message to reply to yet'); process.exit(2); } list = [g.from, ...g.cc]; text = args.join(' '); }
+      list = [...new Set(list)].filter(h => cmd === 'send' || h !== c.handle);
+      if (!list.length || !text) { console.error('usage: relay send <to>[,<to2>,...] <text> | reply-all <text>'); process.exit(2); }
+      await ensureKeys(c); let failed = 0;
+      for (const to of list) {
+        try {
+          const pk = await peerKeys(c, to), cc = list.length > 1 ? list : null;
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to, enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc) } : { to, text: cc ? `[group: ${cc.map(h => '@' + h).join(', ')}] ${text}` : text });
+          console.log(`sent to @${to} (id ${j.id})${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : '@' + to + ' has no key yet') + ']'}`);
+        } catch (e) { failed++; console.log(`FAILED to @${to}: ${e.message}`); }
+      }
+      if (failed) process.exit(1);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
     } else if (cmd === 'poll') {
@@ -202,6 +213,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to> <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] <text> | reply-all <text> | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

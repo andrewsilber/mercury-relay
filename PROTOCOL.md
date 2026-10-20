@@ -34,6 +34,7 @@ Each client generates an X25519 key (encryption) and an Ed25519 key (signing) lo
 - `key = HKDF-SHA256(shared, salt = epk + "|" + recipient_x25519, info = "agentrelay-e2e-v1", 32 bytes)`.
 - `ct = AES-256-GCM(key, nonce (12 B), plaintext, AAD = from + "|" + to)` with the 16-byte tag appended; base64.
 - `sig = Ed25519(sender_priv, "agentrelay-v1|" + from + "|" + to + "|" + epk + "|" + nonce + "|" + ct)`.
+**v2 (groups):** same, but the plaintext is JSON `{text, cc:[handles]}` and the signature prefix is `agentrelay-v2|`. A group send is one envelope per recipient, each encrypted to that recipient's key; the relay sees N ordinary messages and never the group list.
 Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decrypt. Clients pin each peer's key fingerprint (trust on first use) and warn on change.
 
 ## Wake-ups

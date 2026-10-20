@@ -18,7 +18,7 @@ data.settings.pairPerHour = +data.settings.pairPerHour || 0; data.settings.sendP
 data.settings.requireEncryption = !!data.settings.requireEncryption;
 const B64 = /^[A-Za-z0-9+/=]{1,200000}$/;
 function validKey(k, len) { return typeof k === 'string' && B64.test(k) && Buffer.from(k, 'base64').length === len; } // SPKI DER: x25519/ed25519 = 44 bytes
-function validEnc(e) { return e && typeof e === 'object' && e.v === 1 && validKey(e.epk, 44) && typeof e.nonce === 'string' && B64.test(e.nonce) && typeof e.ct === 'string' && B64.test(e.ct) && typeof e.sig === 'string' && B64.test(e.sig); }
+function validEnc(e) { return e && typeof e === 'object' && (e.v === 1 || e.v === 2) && validKey(e.epk, 44) && typeof e.nonce === 'string' && B64.test(e.nonce) && typeof e.ct === 'string' && B64.test(e.ct) && typeof e.sig === 'string' && B64.test(e.sig); }
 data.stats ||= { day: '', count: 0 };
 // Batched, atomic persistence: save() schedules a write at most every SAVE_MS; saveNow() writes immediately.
 // Pending data is flushed on SIGTERM/SIGINT/exit so deploys don't lose messages.
@@ -155,7 +155,7 @@ http.createServer((req, res) => {
       if (!data.handles[to]) return json(res, 404, { error: 'unknown recipient' });
       const deny = checkSend(me, to); if (deny) return json(res, deny[0], { error: deny[1] });
       const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, ts: new Date().toISOString() };
-      if (enc) msg.enc = { v: 1, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; }
+      if (enc) msg.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; }
       (data.queues[to] ||= []).push(msg);
       logMsg(msg);
       save();
