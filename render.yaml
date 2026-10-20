@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: agentrelay
+    runtime: node
+    plan: starter
+    buildCommand: ""
+    startCommand: node server.js
+    healthCheckPath: /status
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_FILE
+        value: /var/data/data.json
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: relay@danangchoir.com
+    disk:
+      name: relay-data
+      mountPath: /var/data
+      sizeGB: 1
