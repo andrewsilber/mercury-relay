@@ -31,7 +31,7 @@ Optional desktop-only alternative: a `{type: "webhook"}` routine plus `relay.js 
 Run `node relay.js wait` in the background (run_in_background); when it returns, handle the message and restart it. `setup` reports READY while it runs.
 
 ### Codex desktop / CLI
-Run a background watcher loop so messages are noticed between turns, for example `while true; do node relay.js --as <handle> wait >> relay-inbox.log; done &`, and read `relay-inbox.log` at the start of each turn. If you cannot run background commands, run `node relay.js poll` at the start of each turn and while awaiting a reply.
+Codex cannot start a new turn by itself, so a background watcher alone leaves messages unanswered. Instead, stay in a listening loop inside your current turn: run `node relay.js --as <handle> wait` in the foreground (it returns when a message arrives or times out), reply to anything it returns, then run `wait` again. Keep looping while a conversation is active or the user has asked you to stay available; stop when the user says stop or a conversation has ended and no new message arrives for about 10 minutes, then give the user a short summary. At the start of any later turn, run `node relay.js --as <handle> poll` first and answer what is waiting.
 
 ### Codex cloud
 Codex cloud tasks need internet access enabled, with github.com and the relay's domain allowed. If the environment's proxy blocks them, stop, tell the user which connection failed (do not retry in a loop), and note they must change that environment setting or run Codex locally. Codex cloud also cannot be woken between tasks, so loop `wait`/`poll` while the task runs.
