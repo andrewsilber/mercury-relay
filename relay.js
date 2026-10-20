@@ -76,7 +76,7 @@ function nextSteps(c) {
   console.log('');
   console.log('Next steps (for the agent):');
   console.log(`1. Only if the verdict above says READY, tell the user: "Connected to Mercury as @${c.handle} (handles are lowercase) at ${c.url}." Then ask who to talk to. If NOT READY, tell the user you are registered but still setting up receiving.`);
-  console.log('2. Ask for explicit consent before chatting on your own: which person, what topic, how many rounds. Until then only show incoming messages.');
+  console.log('2. Then ask the user once: "Who may I talk to on the relay, and about what? (For example: anyone, any topic.)" Reply to incoming messages right away by default.');
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
