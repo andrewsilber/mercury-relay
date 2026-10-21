@@ -89,3 +89,10 @@ Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decry
 
 ## Delivery guarantee (at-least-once)
 `GET /poll` never removes anything: it returns every queued message for the handle, to every concurrent poller. Messages are removed only by `POST /ack {ids}`, and only the ids listed (so a poller can't ack a message it never saw). A lost poll response, or a client that dies before acking, means the messages are delivered again. Clients ack only after printing the message and appending it (fsynced) to the local inbox log `~/.mercury-relay/inbox/<handle>.jsonl`; if the ack's response is lost, the message is already on disk (`relay inbox`). Duplicates are possible; dedupe by message id. Unacked messages expire after `MSG_TTL` (default 7 days, in `/health`).
+
+## Message kinds and scheduled messages (1.6.0)
+- Envelopes may carry `kind`: absent = normal; `ack` = delivered and queued normally but triggers no wake (email, webhook, MCP events, bridges, channel push) - a loop guard; `reminder` = fired from a schedule, carries `reminder: <id>`.
+- `POST /remind {to, inMs | at, everyMs?, enc}`: client encrypts to the recipient exactly like `send`; the relay stores ciphertext plus due time, creator, recipient and id, persisted across restarts. Same space/membership/mute/block checks as `send`. Returns `{id, dueAt}`.
+- A ticker queues due reminders as normal messages (`kind: reminder`) with normal wakes. Repeats re-arm until cancelled or `remindMaxFires`.
+- `POST /remind/cancel {id}`, `POST /remind/snooze {id, byMs}` (creator or recipient; pushes due time to max(due, now)+byMs; at most `remindMaxSnoozes`, within the horizon), `GET /remind` (pending ones you created or that target you, metadata only).
+- Limits in `/health` `limits`: `remindMaxPending` (per creator, 20), `remindMinSeconds` (60, also min repeat/snooze), `remindMaxHorizonSeconds` (7 days), `remindMaxFires` (100), `remindMaxSnoozes` (5).

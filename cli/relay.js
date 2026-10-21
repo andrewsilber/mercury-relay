@@ -144,7 +144,7 @@ async function peerKeys(c, h) { // fetch + pin (trust on first use)
 }
 // Structured variant for the Claude Code channel: same decryption, trust checks and file saving as openMsg.
 async function openMsgData(c, m) {
-  const base = { id: m.id, from: m.from, fromShow: disp(c, m.from), ts: m.ts, cc: [], re: null, encrypted: !!m.enc, verified: false, text: '', attachments: [], error: null };
+  const base = { kind: m.kind || null, reminder: m.reminder || null, id: m.id, from: m.from, fromShow: disp(c, m.from), ts: m.ts, cc: [], re: null, encrypted: !!m.enc, verified: false, text: '', attachments: [], error: null };
   if (!m.enc) return { ...base, text: String(m.text || ''), attachments: files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]') };
   try {
     if (!c.keys) throw new Error('no local keys');
@@ -154,15 +154,16 @@ async function openMsgData(c, m) {
     return { ...base, cc: others.map(h => disp(c, h)), re: r.verified ? r.re : null, verified: r.verified, text: r.text, attachments: files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]') };
   } catch (e) { return { ...base, error: 'could not decrypt: ' + e.message + '; keys may have changed' }; }
 }
+const kindTag = m => m.kind === 'reminder' ? ` REMINDER ${m.reminder || ''} (cancel: relay remind cancel ${m.reminder || '<id>'})` : m.kind === 'ack' ? ' ACK (no reply needed)' : '';
 async function openMsg(c, m) {
-  if (!m.enc) return [`[relay] from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`, ...files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]')].join('\n');
+  if (!m.enc) return [`[relay]${kindTag(m)} from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`, ...files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]')].join('\n');
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
     const others = r.cc.filter(h => h !== c.handle && h !== m.from);
     if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others, id: m.id }; saveConf(c); }
-    return `[relay] from ${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => disp(c, h)).join(', ') : ''} at ${m.ts} (id ${m.id}${r.re && r.verified ? ', re ' + r.re : ''}) [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}` + files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]').map(l => '\n' + l).join('');
-  } catch (e) { return `[relay] from ${disp(c, m.from)} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
+    return `[relay]${kindTag(m)} from ${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => disp(c, h)).join(', ') : ''} at ${m.ts} (id ${m.id}${r.re && r.verified ? ', re ' + r.re : ''}) [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}` + files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]').map(l => '\n' + l).join('');
+  } catch (e) { return `[relay]${kindTag(m)} from ${disp(c, m.from)} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
 function need() { const c = loadConf(); if (!c) { console.error('Not initialized. Run: node relay.js init <handle>'); process.exit(2); } return c; }
 async function call(c, method, p, bodyObj) {
@@ -314,11 +315,13 @@ if (isMain) (async () => {
     } else if (cmd === 'send' || cmd === 'reply-all') {
       const c = need(); let list, text;
       let force = false; for (let k; (k = args.indexOf('--force')) >= 0;) { force = true; args.splice(k, 1); }
+      let ack = false; for (let k; (k = args.indexOf('--ack')) >= 0;) { ack = true; args.splice(k, 1); }
       const fpaths = []; for (let k; (k = args.indexOf('--file')) >= 0;) { const f = args[k + 1]; if (!f) { console.error('--file needs a path'); process.exit(2); } fpaths.push(f); args.splice(k, 2); }
       let re = null; const ri = args.indexOf('--re'); if (ri >= 0) { re = args[ri + 1]; args.splice(ri, 2); if (!re) { console.error('--re needs a message id'); process.exit(2); } }
       if (cmd === 'send') { list = (args.shift() || '').split(',').filter(x => x.trim()).map(x => canon(c, x.trim())); text = args.join(' '); }
       else { const g = c.lastGroup; if (!g) { console.error('no group message to reply to yet'); process.exit(2); } list = [g.from, ...g.cc]; text = args.join(' '); re ||= g.id || null; }
       list = [...new Set(list)].filter(h => cmd === 'send' || h !== c.handle);
+      if (text && /^-{1,2}[a-z]/i.test(text.trim()) && !force) { console.error(`refusing to send a message that looks like a command-line flag (${JSON.stringify(text.trim().slice(0, 30))}); check the command, or add --force to send it as text`); process.exit(2); }
       if (!list.length || !text) { console.error('usage: relay send <to>[,<to2>,...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text>'); process.exit(2); }
       await ensureKeys(c); let failed = 0, att = null;
       if (fpaths.length) {
@@ -338,11 +341,34 @@ if (isMain) (async () => {
       for (const to of list) {
         try {
           const pk = await peerKeys(c, to), cc = list.length > 1 ? list : null;
-          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(to), enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc, { re, files: att }) } : { to: wire(to), text: (cc ? `[group: ${cc.map(h => disp(c, h)).join(', ')}] ` : '') + (re ? `[re ${re}] ` : '') + text, ...(att ? { files: att } : {}) });
-          console.log(`sent to ${disp(c, to)} (id ${j.id})${att ? ' with ' + att.length + ' attachment' + (att.length > 1 ? 's' : '') : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : disp(c, to) + ' has no key yet') + ']'}`);
+          const j = await call(c, 'POST', '/send', pk && c.keysUploaded ? { to: wire(to), ...(ack ? { kind: 'ack' } : {}), enc: e2e.encrypt(text, c.handle, to, pk, c.keys, cc, { re, files: att }) } : { to: wire(to), ...(ack ? { kind: 'ack' } : {}), text: (cc ? `[group: ${cc.map(h => disp(c, h)).join(', ')}] ` : '') + (re ? `[re ${re}] ` : '') + text, ...(att ? { files: att } : {}) });
+          console.log(`sent${ack ? ' ack' : ''} to ${disp(c, to)} (id ${j.id})${att ? ' with ' + att.length + ' attachment' + (att.length > 1 ? 's' : '') : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : disp(c, to) + ' has no key yet') + ']'}`);
         } catch (e) { failed++; console.log(`FAILED to ${disp(c, to)}: ${e.message}`); }
       }
       if (failed) process.exit(1);
+    } else if (cmd === 'remind') {
+      const c = need(); const dur = v => { const mm = /^(\d+)([smhd])$/.exec(String(v || '')); return mm ? +mm[1] * { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[mm[2]] : NaN; };
+      const RF = path.join(DIR, `${c.handle.replace(/[^\w.@-]/g, '_')}.reminders.json`); const local = readJson(RF) || {};
+      const saveLocal = () => { fs.writeFileSync(RF, JSON.stringify(local, null, 1), { mode: 0o600 }); };
+      const usage = () => { console.error('usage: relay remind <@handle|@me> in <10m|2h|1d> [--every <5m>] <text> | remind <@handle|@me> at <ISO time> [--every <5m>] <text> | remind list | remind cancel <id> | remind snooze <id> <10m>'); process.exit(2); };
+      if (args[0] === 'list') {
+        const j = await call(c, 'GET', '/remind');
+        if (!j.reminders.length) console.log('[relay] no pending reminders');
+        for (const r of j.reminders) console.log(`${r.id}  due ${r.dueAt}${r.everySeconds ? ` every ${r.everySeconds}s (fired ${r.fires}/${r.maxFires})` : ''}  ${disp(c, r.from)} -> ${disp(c, r.to)}${local[r.id] ? ': ' + local[r.id] : ''}`);
+        return;
+      }
+      if (args[0] === 'snooze') { const by = dur(args[2]); if (!args[1] || !by) usage(); const j = await call(c, 'POST', '/remind/snooze', { id: args[1], byMs: by }); console.log(`snoozed reminder ${j.id} until ${j.dueAt} (snooze ${j.snoozes}/${j.maxSnoozes})`); return; }
+      if (args[0] === 'cancel') { if (!args[1]) usage(); const j = await call(c, 'POST', '/remind/cancel', { id: args[1] }); delete local[j.cancelled]; saveLocal(); console.log(`cancelled reminder ${j.cancelled}`); return; }
+      let every = null; const ei = args.indexOf('--every'); if (ei >= 0) { every = dur(args[ei + 1]); args.splice(ei, 2); if (!every) usage(); }
+      const target = args.shift(), mode = args.shift(), when = args.shift(), text = args.join(' ');
+      if (!target || !['in', 'at'].includes(mode) || !when || !text) usage();
+      const to = /^@?me$/i.test(target) ? c.handle : canon(c, target);
+      const body = mode === 'in' ? { inMs: dur(when) } : { at: when };
+      if (mode === 'in' && !body.inMs) usage(); if (mode === 'at' && !Number.isFinite(Date.parse(when))) { console.error('at needs an ISO time, e.g. 2026-10-21T15:00:00+07:00'); process.exit(2); }
+      await ensureKeys(c); const pk = await peerKeys(c, to);
+      const j = await call(c, 'POST', '/remind', { to: wire(to), ...body, ...(every ? { everyMs: every } : {}), ...(pk && c.keysUploaded ? { enc: e2e.encrypt(text, c.handle, to, pk, c.keys) } : { text }) });
+      local[j.id] = text; saveLocal();
+      console.log(`reminder ${j.id} set for ${disp(c, to)} at ${j.dueAt}${j.everySeconds ? `, then every ${j.everySeconds}s (max ${j.maxFires} times)` : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED]'}. Cancel: relay remind cancel ${j.id}`);
     } else if (cmd === 'members') {
       const c = need(); const sp = norm(args[0] || mySpace(c));
       const j = await call(c, 'GET', `/spaces/${sp}/members`);
@@ -408,6 +434,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | inbox [--last N] [--since MIN] (messages already received on this computer) | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | send --ack <to> <text> (acknowledgement: delivered, never wakes) | remind <@h|@me> in 10m|at <ISO> [--every 5m] <text> | remind list | remind cancel <id> | remind snooze <id> <10m> | poll | inbox [--last N] [--since MIN] (messages already received on this computer) | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

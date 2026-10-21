@@ -34,10 +34,10 @@ const ALLOW_PRIVATE = process.env.WEBHOOK_ALLOW_PRIVATE === '1';
 const badHost = hn => /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?(::1|fc|fd|fe80))/i.test(hn) || hn.endsWith('.local') || hn.endsWith('.internal');
 
 function createRelay({ store, notifier, limits = {} }) {
-  const L = { attachMax: Math.max(1024, Math.floor(+limits.attachMax || 256 * 1024)), adminLogMax: Math.max(1, Math.floor(+limits.adminLogMax || 1000)), wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
+  const L = { attachMax: Math.max(1024, Math.floor(+limits.attachMax || 256 * 1024)), adminLogMax: Math.max(1, Math.floor(+limits.adminLogMax || 1000)), wakeRetryMs: limits.wakeRetryMs ?? 10 * 60e3, wakeMinIntervalMs: limits.wakeMinIntervalMs ?? 0, emailDailyMax: limits.emailDailyMax ?? 80, msgTtlMs: limits.msgTtlMs || 7 * 86400e3, remindMaxPending: limits.remindMaxPending || 20, remindMinMs: limits.remindMinMs || 60e3, remindHorizonMs: limits.remindHorizonMs || 7 * 86400e3, remindMaxFires: limits.remindMaxFires || 100, remindMaxSnoozes: limits.remindMaxSnoozes || 5, remindTickMs: limits.remindTickMs || 5000, queueMax: limits.queueMax || 1000, inviteFailsPerIp: limits.inviteFailsPerIp || 5 };
   const FAIL_PER_IP = L.inviteFailsPerIp;
   const data = store.load();
-  data.handles ||= {}; data.queues ||= {};
+  data.handles ||= {}; data.queues ||= {}; data.reminders ||= {};
   data.settings ||= {}; const S = data.settings;
   S.suspended = !!S.suspended; S.pairPerHour = +S.pairPerHour || 0; S.sendPerMinute = +S.sendPerMinute || 0; S.requireEncryption = !!S.requireEncryption;
   data.stats ||= { day: '', count: 0 };
@@ -190,6 +190,23 @@ function createRelay({ store, notifier, limits = {} }) {
     wakeTimers[to] = setTimeout(() => { delete wakeTimers[to]; const x = data.handles[to]; if (x && !x.wakePending) fireWake(to, msg); }, wait);
     wakeTimers[to].unref && wakeTimers[to].unref();
   }
+  function fireReminders() {
+    const now = Date.now(); let changed = false;
+    for (const r of Object.values(data.reminders)) {
+      if (Date.parse(r.dueAt) > now) continue;
+      changed = true;
+      if (!data.handles[r.to] || !data.handles[r.from]) { delete data.reminders[r.id]; continue; }
+      const msg = { id: now + '-' + crypto.randomBytes(3).toString('hex'), from: r.from, to: r.to, ts: new Date(now).toISOString(), kind: 'reminder', reminder: r.id };
+      if (r.enc) msg.enc = r.enc; else { msg.text = r.text; msg.plaintext = true; }
+      expire(r.to);
+      if ((data.queues[r.to] || []).length < L.queueMax) { (data.queues[r.to] ||= []).push(msg); logMsg(msg); flush(r.to); notify(msg); }
+      r.fires++;
+      if (r.everyMs && r.fires < r.maxFires) { let d = Date.parse(r.dueAt) + r.everyMs; if (d <= now) d = now + r.everyMs; r.dueAt = new Date(d).toISOString(); }
+      else delete data.reminders[r.id];
+    }
+    if (changed) save();
+  }
+  setInterval(fireReminders, L.remindTickMs).unref();
   const mcp = require('./mcp.js')({ data, save, relay: { status: me => relay.status(me), members: me => relay.members(me) }, allowPrivate: ALLOW_PRIVATE, version: limits.serverVersion || '0.0.0' });
   const relay = {
     mcp, limits: L, emailStats: () => emailDay(), data, waiters, msgLog, flush, save, flushStore, auth, clientInfo, noteClient,
@@ -293,10 +310,56 @@ function createRelay({ store, notifier, limits = {} }) {
       expire(to); if ((data.queues[to] || []).length >= L.queueMax) return err(429, 'recipient queue full (' + L.queueMax + ' unread messages); try again later');
       const deny = checkSend(me, to); if (deny) return deny;
       const msg = { id: Date.now() + '-' + crypto.randomBytes(3).toString('hex'), from: me, to, ts: new Date().toISOString() };
+      if (m.kind === 'ack') msg.kind = 'ack'; // delivered, but never wakes the recipient (loop guard)
       if (enc) msg.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else { msg.text = String(m.text); msg.plaintext = true; if (m.files && m.files.length) msg.files = m.files.map(f => ({ name: String(f.name).slice(0, 255), mime: String(f.mime || 'application/octet-stream').slice(0, 100), size: Buffer.byteLength(f.data, 'base64'), sha256: String(f.sha256 || '').slice(0, 64), data: f.data })); }
       (data.queues[to] ||= []).push(msg);
-      logMsg(msg); save(); flush(to); notify(msg);
+      logMsg(msg); save(); flush(to); if (msg.kind !== 'ack') notify(msg);
       return ok({ ok: true, id: msg.id });
+    },
+    // Scheduled messages ("reminders"): the client encrypts the text to the recipient; the relay only
+    // stores the envelope and a due time, and queues it as a normal message (kind: reminder) when due.
+    remind(me, m) {
+      const enc = m.enc;
+      if (!m.to || (!m.text && !enc)) return err(400, 'to and text (or enc) required');
+      const a = parseAddr(m.to, spaceOf(me)); if (a.error) return err(400, a.error);
+      const to = a.key; if (a.space !== spaceOf(me)) return err(403, 'cross-space reminders are not enabled');
+      if (!data.handles[to]) return err(404, 'unknown recipient');
+      if (enc && !validEnc(enc)) return err(400, 'invalid encrypted envelope');
+      if (enc && Buffer.byteLength(enc.ct, 'base64') > 64 * 1024) return err(413, 'reminder too large (64 KB max; no attachments)');
+      if (!enc && S.requireEncryption) return err(400, 'this relay requires end-to-end encryption');
+      const st = (data.handles[me] || {}).status; if (S.suspended) return err(503, 'relay suspended by admin');
+      if (st === 'blocked' || st === 'muted') return err(403, 'handle ' + st + ' by admin');
+      if ((data.handles[to] || {}).status === 'blocked') return err(403, 'recipient blocked by admin');
+      const now = Date.now(), due = m.at ? Date.parse(m.at) : now + (+m.inMs || 0), every = m.everyMs ? +m.everyMs : 0;
+      if (!Number.isFinite(due)) return err(400, 'invalid time');
+      if (due - now < L.remindMinMs - 1000) return err(400, `too soon: minimum delay is ${L.remindMinMs / 1000}s`);
+      if (due - now > L.remindHorizonMs) return err(400, `too far ahead: maximum is ${L.remindHorizonMs / 1000}s`);
+      if (every && (!Number.isFinite(every) || every < L.remindMinMs)) return err(400, `repeat interval must be at least ${L.remindMinMs / 1000}s`);
+      if (Object.values(data.reminders).filter(r => r.from === me).length >= L.remindMaxPending) return err(429, `too many pending reminders (max ${L.remindMaxPending}); cancel some first`);
+      let id; do { id = Array.from(crypto.randomBytes(4), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b & 31]).join(''); } while (data.reminders[id]);
+      const r = { id, from: me, to, created: new Date(now).toISOString(), dueAt: new Date(due).toISOString(), everyMs: every || undefined, fires: 0, maxFires: every ? L.remindMaxFires : 1 };
+      if (enc) r.enc = { v: enc.v, epk: enc.epk, nonce: enc.nonce, ct: enc.ct, sig: enc.sig }; else r.text = String(m.text);
+      data.reminders[id] = r; save();
+      return ok({ ok: true, id, dueAt: r.dueAt, everySeconds: every ? every / 1000 : null, maxFires: r.maxFires });
+    },
+    cancelReminder(me, m) {
+      const r = data.reminders[String(m.id || '').toUpperCase()]; if (!r) return err(404, 'no such reminder (already fired or cancelled?)');
+      if (r.from !== me && r.to !== me) return err(403, 'only the creator or the recipient can cancel a reminder');
+      delete data.reminders[r.id]; save(); return ok({ ok: true, cancelled: r.id });
+    },
+    snoozeReminder(me, m) {
+      const r = data.reminders[String(m.id || '').toUpperCase()]; if (!r) return err(404, 'no such reminder (already fired or cancelled?)');
+      if (r.from !== me && r.to !== me) return err(403, 'only the creator or the recipient can snooze a reminder');
+      const by = +m.byMs; if (!Number.isFinite(by) || by < L.remindMinMs) return err(400, `snooze must be at least ${L.remindMinMs / 1000}s`);
+      if ((r.snoozes || 0) >= L.remindMaxSnoozes) return err(429, `snoozed too often (max ${L.remindMaxSnoozes}); cancel it or set a new one`);
+      const due = Math.max(Date.parse(r.dueAt), Date.now()) + by;
+      if (due - Date.now() > L.remindHorizonMs) return err(400, `too far ahead: maximum is ${L.remindHorizonMs / 1000}s`);
+      r.dueAt = new Date(due).toISOString(); r.snoozes = (r.snoozes || 0) + 1; save();
+      return ok({ ok: true, id: r.id, dueAt: r.dueAt, snoozes: r.snoozes, maxSnoozes: L.remindMaxSnoozes });
+    },
+    listReminders(me) {
+      return ok({ reminders: Object.values(data.reminders).filter(r => r.from === me || r.to === me).sort((a, b) => a.dueAt.localeCompare(b.dueAt))
+        .map(r => ({ id: r.id, from: r.from, to: r.to, created: r.created, dueAt: r.dueAt, everySeconds: r.everyMs ? r.everyMs / 1000 : null, fires: r.fires, maxFires: r.maxFires, snoozes: r.snoozes || 0, encrypted: !!r.enc })) });
     },
     status(me) {
       const h = data.handles[me];

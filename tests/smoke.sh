@@ -406,3 +406,46 @@ echo "PASS: no double-@ addresses in CLI output"
 VT="$(curl -s -d '{"handle":"vtest"}' "$URL/register" | sed -E 's/.*"token":"([a-f0-9]+)".*/\1/')"; command curl -s -o /dev/null -H "authorization: Bearer $VT" -H 'X-Relay-Client: 9.9.9' -H 'X-Relay-Client-Dirty: 1' "$URL/status"
 A "$URL/admin/api/handles?q=vtest" | grep -q '"client":{"version":"9.9.9","official":false,"modified":true}' || fail "admin client version flags"
 echo "PASS: admin login, message log, suspend/resume, block, rate limit, delete, persistence"
+# --- reminders (scheduled messages), snooze, --ack loop guard, flag-like body guard ---
+RP2=$((PORT + 11)); RURL="http://127.0.0.1:$RP2"
+start_r() { (cd "$TMP" && REMIND_MIN=3s REMIND_TICK=1s REMIND_MAX_PENDING=3 REMIND_HORIZON=1h REMIND_MAX_FIRES=50 REMIND_MAX_SNOOZES=2 PORT=$RP2 env $(ST rem) node "$ROOT/server.js" >>"$TMP/rem.log" 2>&1) & SRVR=$!; for i in $(seq 50); do curl -sf "$RURL/health" >/dev/null && break; sleep 0.1; done; }
+start_r
+$R init rem-a --url "$RURL" >/dev/null; $R init rem-b --url "$RURL" >/dev/null
+curl -s "$RURL/health" | grep -q '"remindMaxPending":3' || { echo "FAIL: remind limits in /health"; exit 1; }
+O="$($R --as rem-a remind @rem-b in 3s "remind secret one")"; RID="$(echo "$O" | sed -n 's/^reminder \([A-Z0-9]*\) set.*/\1/p')"; [ -n "$RID" ] || { echo "FAIL: remind create: $O"; exit 1; }
+DUMP rem | grep -q "remind secret one" && { echo "FAIL: reminder plaintext stored on relay"; exit 1; }
+$R --as rem-b remind list | grep -q "$RID" || { echo "FAIL: recipient cannot list reminder"; exit 1; }
+$R --as rem-a remind list | grep -q "$RID.*remind secret one" || { echo "FAIL: creator list lacks local text"; exit 1; }
+sleep 5; P="$($R --as rem-b poll)"; echo "$P" | grep -q "REMINDER $RID" && echo "$P" | grep -q "remind secret one" || { echo "FAIL: reminder not delivered: $P"; exit 1; }
+$R --as rem-a remind list | grep -q "$RID" && { echo "FAIL: one-shot reminder still pending"; exit 1; }
+# too soon / limits
+$R --as rem-a remind @rem-b in 1s "x" >/dev/null 2>&1 && { echo "FAIL: min delay not enforced"; exit 1; }
+$R --as rem-a remind @rem-b in 2h "x" >/dev/null 2>&1 && { echo "FAIL: horizon not enforced"; exit 1; }
+# repeat + cancel by recipient
+O="$($R --as rem-a remind @rem-b in 3s --every 3s "repeat me")"; RR="$(echo "$O" | sed -n 's/^reminder \([A-Z0-9]*\) set.*/\1/p')"
+sleep 7.5; N1="$($R --as rem-b poll | grep -c "REMINDER $RR" || true)"; [ "$N1" -ge 2 ] || { echo "FAIL: repeat fired $N1 times"; exit 1; }
+$R --as rem-b remind cancel "$RR" | grep -q cancelled || { echo "FAIL: recipient cancel"; exit 1; }
+sleep 4; $R --as rem-b poll | grep -q "REMINDER $RR" && { echo "FAIL: repeat kept firing after cancel"; exit 1; }
+# snooze (cap 2) + restart persistence
+O="$($R --as rem-a remind @me in 3s "persist me")"; RS="$(echo "$O" | sed -n 's/^reminder \([A-Z0-9]*\) set.*/\1/p')"
+$R --as rem-a remind snooze "$RS" 3s | grep -q "snoozed reminder $RS" || { echo "FAIL: snooze"; exit 1; }
+$R --as rem-b remind snooze "$RS" 3s >/dev/null 2>&1 && { echo "FAIL: stranger could snooze"; exit 1; }
+$R --as rem-a remind snooze "$RS" 3s >/dev/null; $R --as rem-a remind snooze "$RS" 3s >/dev/null 2>&1 && { echo "FAIL: snooze cap not enforced"; exit 1; }
+kill $SRVR; wait $SRVR 2>/dev/null || true; sleep 4; $R --as rem-a poll | grep -q "persist me" && { echo "FAIL: snooze ignored"; exit 1; }
+start_r; sleep 10; $R --as rem-a poll | grep -q "REMINDER $RS" || { echo "FAIL: reminder lost across restart"; exit 1; }
+for i in 1 2 3; do $R --as rem-a remind @rem-b in 10m "p$i" >/dev/null; done
+$R --as rem-a remind @rem-b in 10m "p4" >/dev/null 2>&1 && { echo "FAIL: pending cap not enforced"; exit 1; }
+# --ack never wakes (bridge), normal send does; flag-like body refused
+HL2="$TMP/hook2.log"; : > "$HL2"; HP2=$((PORT + 12))
+node -e 'require("http").createServer((q,s)=>{q.resume();q.on("end",()=>{require("fs").appendFileSync(process.argv[2],"x\n");s.end("{}")})}).listen(+process.argv[1],"127.0.0.1")' "$HP2" "$HL2" & HS2=$!; sleep 0.4
+node "$ROOT/relay.js" --as rem-b bridge webhook "http://127.0.0.1:$HP2/w" --renudge 0 2>/dev/null & BR2=$!; sleep 1
+$R --as rem-a send --ack rem-b "ACK got it" | grep -q "sent ack" || { echo "FAIL: send --ack"; exit 1; }
+sleep 3; [ "$(wc -l < "$HL2")" = 0 ] || { echo "FAIL: ack woke the bridge"; exit 1; }
+$R --as rem-a send rem-b "real one" >/dev/null; for i in $(seq 30); do [ "$(wc -l < "$HL2")" -ge 1 ] && break; sleep 0.2; done
+[ "$(wc -l < "$HL2")" = 1 ] || { echo "FAIL: normal message did not wake"; exit 1; }
+kill $BR2 $HS2 2>/dev/null || true; wait $BR2 $HS2 2>/dev/null || true
+$R --as rem-b poll | grep -q "ACK (no reply needed) from" || { echo "FAIL: ack not marked"; exit 1; }
+$R --as rem-a send rem-b "--help" >/dev/null 2>&1 && { echo "FAIL: flag-like body sent"; exit 1; }
+$R --as rem-a send --force rem-b "--help" >/dev/null || { echo "FAIL: --force flag-like body"; exit 1; }
+kill $SRVR 2>/dev/null || true; wait $SRVR 2>/dev/null || true
+echo "PASS: reminders (E2E, fire, list, cancel by recipient, repeat stops, snooze + cap, restart persistence, limits), --ack never wakes, flag-like body guard"
