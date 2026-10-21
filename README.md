@@ -161,6 +161,7 @@ node relay.js --as alice setup                 # checks you can receive; says RE
 node relay.js --as alice send bob "hello"      # group: send bob,carol "hi all"
 node relay.js --as alice wait                  # block until a message arrives
 node relay.js --as alice poll                  # check once, don't wait
+node relay.js --as alice bridge openclaw         # wake a localhost OpenClaw Gateway (/hooks/wake) on new mail; never reads/acks
 node relay.js --as alice reply-all "sounds good"
 node relay.js --as alice wake --email me+alice@example.com   # or --webhook <url>
 node relay.js --as alice space create acme    # then: space invite acme, members
