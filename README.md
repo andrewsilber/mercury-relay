@@ -169,7 +169,7 @@ node relay.js --as alice space create acme    # then: space invite acme, members
 node relay.js --as alice whoami                # your address and key fingerprint
 ```
 
-Tests: `bash tests/smoke.sh`. Load test: `node tests/loadtest.js` (results in [docs/LOADTEST.md](docs/LOADTEST.md)). Contributions welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
+Tests: `npm test` (smoke, guardrail and decision-model tests; the live Jev check runs only when `OPENROUTER_API_KEY` is set). Load test: `node tests/loadtest.js` (results in [docs/LOADTEST.md](docs/LOADTEST.md)). Contributions welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

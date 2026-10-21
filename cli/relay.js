@@ -9,7 +9,7 @@ const DEFAULT_URL = 'https://relay.greybeardconsortium.com';
 const norm = h => (h || '').replace(/^@/, '').toLowerCase();
 const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const confPath = h => path.join(DIR, norm(h) + '.json');
-const identities = () => { try { return fs.readdirSync(DIR).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)); } catch { return []; } };
+const identities = () => { try { return fs.readdirSync(DIR).filter(f => f.endsWith('.json') && !/\.(reminders|guard)\.json$/.test(f)).map(f => f.slice(0, -5)); } catch { return []; } };
 const currentH = () => { try { return fs.readFileSync(path.join(DIR, 'current'), 'utf8').trim(); } catch { return ''; } };
 // Identity file precedence: MERCURY_RELAY_CONFIG > --as / MERCURY_RELAY_HANDLE > ~/.mercury-relay/current > the only identity > legacy ~/.mercury-relay.json (read-only fallback)
 let AS = ENV('HANDLE') || null;
@@ -112,6 +112,25 @@ async function deliver(c, msgs, via) {
   for (const m of msgs) { const line = await openMsg(c, m); out.push({ id: m.id, from: m.from, ts: m.ts, line }); console.log(line); }
   logInbox(c, out, via);
   if (msgs.length) await call(c, 'POST', '/ack', { ids: msgs.map(m => m.id) });
+  if (msgs.length) { await recordInbound(c, msgs).catch(() => {}); console.log(CMD.footer(c.handle, REPO)); }
+}
+// --- guardrails + decision model (cli/guard.js, cli/decide.js) ---
+const CMD = require('./commands.js'), G = require('./guard.js'), D = require('./decide.js');
+const guardOf = c => { const cfg = G.cfgOf(c); return { cfg, g: G.open(DIR, c.handle), d: D.createDecider(c.decision || {}, cfg) }; };
+async function setReminder(c, to, ms, text) {
+  const pk = await peerKeys(c, to);
+  return call(c, 'POST', '/remind', { to: wire(to), inMs: ms, ...(pk && c.keysUploaded ? { enc: e2e.encrypt(text, c.handle, to, pk, c.keys) } : { text }) });
+}
+async function cancelCheckback(c, cv) { if (!cv.checkback) return; const id = cv.checkback; delete cv.checkback; await call(c, 'POST', '/remind/cancel', { id }).catch(() => {}); }
+async function recordInbound(c, msgs) {
+  const { cfg, g, d } = guardOf(c), now = Date.now(); g.prune(cfg, now);
+  for (const m of msgs) {
+    if (m.kind === 'reminder' || m._plain == null || m.from === c.handle) continue;
+    const cv = g.conv(mySpace(c), [c.handle, m.from, ...(m._cc || [])]), cls = g.classify(cv, m._plain, d.rules, cfg);
+    g.record(cv, { t: now, dir: 'in', from: m.from, ack: cls.ack || m.kind === 'ack', rep: cls.rep, final: cls.final, norm: d.rules.norm(m._plain), preview: m._plain.slice(0, 300) });
+    if (cls.final) await cancelCheckback(c, cv);
+  }
+  g.save();
 }
 // Addresses: "bob" = bob in my space, "bob@acme" = bob in space acme, "bob@public" = public bob. Canonical form matches the relay's keys.
 const mySpace = c => c.space || (c.handle.includes('@') ? c.handle.split('@')[1] : 'public');
@@ -145,23 +164,27 @@ async function peerKeys(c, h) { // fetch + pin (trust on first use)
 // Structured variant for the Claude Code channel: same decryption, trust checks and file saving as openMsg.
 async function openMsgData(c, m) {
   const base = { kind: m.kind || null, reminder: m.reminder || null, id: m.id, from: m.from, fromShow: disp(c, m.from), ts: m.ts, cc: [], re: null, encrypted: !!m.enc, verified: false, text: '', attachments: [], error: null };
+  if (!m.enc) { m._plain = String(m.text || ''); m._cc = []; }
   if (!m.enc) return { ...base, text: String(m.text || ''), attachments: files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]') };
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
     const others = r.cc.filter(h => h !== c.handle && h !== m.from);
     if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others, id: m.id }; saveConf(c); }
+    m._plain = r.text; m._cc = r.verified ? others : [];
     return { ...base, cc: others.map(h => disp(c, h)), re: r.verified ? r.re : null, verified: r.verified, text: r.text, attachments: files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]') };
   } catch (e) { return { ...base, error: 'could not decrypt: ' + e.message + '; keys may have changed' }; }
 }
 const kindTag = m => m.kind === 'reminder' ? ` REMINDER ${m.reminder || ''} (cancel: relay remind cancel ${m.reminder || '<id>'})` : m.kind === 'ack' ? ' ACK (no reply needed)' : '';
 async function openMsg(c, m) {
+  if (!m.enc) { m._plain = String(m.text || ''); m._cc = []; }
   if (!m.enc) return [`[relay]${kindTag(m)} from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`, ...files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]')].join('\n');
   try {
     if (!c.keys) throw new Error('no local keys');
     const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
     const others = r.cc.filter(h => h !== c.handle && h !== m.from);
     if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others, id: m.id }; saveConf(c); }
+    m._plain = r.text; m._cc = r.verified ? others : [];
     return `[relay]${kindTag(m)} from ${disp(c, m.from)}${others.length ? ' to you + ' + others.map(h => disp(c, h)).join(', ') : ''} at ${m.ts} (id ${m.id}${r.re && r.verified ? ', re ' + r.re : ''}) [end-to-end encrypted]${r.verified ? '' : ' [SENDER NOT VERIFIED]'}: ${r.text}` + files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]').map(l => '\n' + l).join('');
   } catch (e) { return `[relay]${kindTag(m)} from ${disp(c, m.from)} at ${m.ts} [COULD NOT DECRYPT: ${e.message}; keys may have changed]`; }
 }
@@ -195,7 +218,7 @@ async function poll(c) {
   if (j.messages.length) await deliver(c, j.messages, 'poll');
   else {
     const recent = readInbox(c, { last: 50, sinceMs: Date.now() - 15 * 60e3 });
-    console.log('[relay] no new messages' + (recent.length ? ` (${recent.length} received on this computer in the last 15 min, possibly by another process: \`node relay.js --as ${c.handle} inbox\`)` : ''));
+    console.log('[relay] no new messages' + (recent.length ? ` (${recent.length} received on this computer in the last 15 min, possibly by another process: \`node relay.js --as ${c.handle} inbox\`)` : '') + `. Nothing to do; \`relay status\` shows open conversations and reminders.`);
   }
   return j.messages.length;
 }
@@ -228,7 +251,29 @@ function nextSteps(c) {
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
-module.exports = { logInbox, readInbox, wait, poll, loadConf, ensureKeys, openMsgData, call, need, VERSION };
+// Live state for `relay status` / `relay help`: what the agent should know right now.
+async function liveState(c) {
+  const out = [`[relay] client ${VERSION}`];
+  if (!c) { out.push('[relay] not initialized. Run: relay init <handle> --url <URL> (see AGENTS.md)'); return out; }
+  out.push(`[relay] you are ${addr(c.handle)} in space ${mySpace(c)} at ${c.url}; other identities on this computer: ${identities().filter(h => h !== c.handle).map(addr).join(', ') || 'none'}`);
+  let st = null; try { st = await call(c, 'GET', '/status'); } catch (e) { out.push('[relay] relay unreachable: ' + e.message); }
+  if (st) out.push(st.unreadCount ? `[relay] UNREAD: ${st.unreadCount} message(s). Run poll now.` : '[relay] unread: none');
+  try { const r = (await call(c, 'GET', '/remind')).reminders; out.push(`[relay] reminders: ${r.length ? r.map(x => `${x.id} to ${disp(c, x.to)} due ${x.dueAt}`).join('; ') : 'none'}`); } catch {}
+  try { const m = await call(c, 'GET', `/spaces/${mySpace(c)}/members`); out.push(`[relay] space ${m.space}: ${m.members.length} member(s): ${m.members.map(x => disp(c, x.handle)).join(', ')}`); } catch {}
+  const { cfg, g, d } = guardOf(c), now = Date.now(); g.prune(cfg, now);
+  const convs = Object.values(g.st.convs).filter(v => v.events.length);
+  for (const v of convs) {
+    const r = await d.conversation(v, c.handle, now), who = v.peers.filter(p => p !== c.handle).map(p => disp(c, p)).join(', ') || 'yourself';
+    const ago = Math.round((now - v.events[v.events.length - 1].t) / 60e3);
+    const next = r.state === 'done' ? 'finished' : r.state === 'looping' ? 'looping on acks: stop, or send FINAL <result>' : r.state === 'stalled' ? `stalled; quiet: ${r.stuck === 'all' ? 'everyone' : disp(c, r.stuck)}${r.advice && r.advice !== r.stuck ? ` (${d.name} suggests nudging ${r.advice === 'all' ? 'everyone' : disp(c, r.advice)})` : ''}` : 'open (no FINAL/DONE yet)';
+    out.push(`[relay] conversation with ${who}: ${next}; last message ${ago} min ago${v.checkback ? '; check-back reminder ' + v.checkback : ''}`);
+  }
+  if (!convs.length) out.push('[relay] open conversations: none');
+  out.push(`[relay] decision model: ${d.name}; guardrails: rate ${cfg.rateMax}/${Math.round(cfg.rateWindowMs / 60e3)}min per space, loop after ${cfg.loopAcks} acks, check-back ${cfg.checkbackMs ? Math.round(cfg.checkbackMs / 60e3) + 'min' : 'off'} (relay config)`);
+  out.push(CMD.footer(c.handle, REPO));
+  return out;
+}
+module.exports = { liveState, recordInbound, logInbox, readInbox, wait, poll, loadConf, ensureKeys, openMsgData, call, need, VERSION };
 const isMain = require.main === module || (require.main && require.main.filename === path.join(__dirname, '..', 'relay.js'));
 if (isMain) (async () => {
   const args = process.argv.slice(2);
@@ -338,6 +383,16 @@ if (isMain) (async () => {
           process.exit(3);
         }
       }
+      // guardrails: auto-ack, repeat/loop breaker, per-space rate cap (all skipped with --force)
+      const GD = guardOf(c), now = Date.now(); GD.g.prune(GD.cfg, now);
+      const cv = GD.g.conv(mySpace(c), [c.handle, ...list]); let cls = GD.g.classify(cv, text, GD.d.rules, GD.cfg), hint = '';
+      if (!force) {
+        const chk = G.checkSend(GD.g, cv, text, GD.d.rules, GD.cfg, c.handle, now);
+        if (chk.refuse) { GD.g.save(); console.log(`[relay] NOT SENT (${chk.refuse}) Use --force only if this is really needed.`); process.exit(3); }
+        const adv = await GD.d.ack(text, { recent: cv.events.slice(-6).map(e => `@${e.from}: ${e.preview || ''}`) });
+        if (!ack && adv.ack) { ack = true; hint = 'sent as an ack because it only acknowledges (acks never wake anyone and need no reply; --force sends it as a normal message).'; }
+        else if (!ack && adv.advice === true) hint = `the ${GD.d.name} decision model thinks this only acknowledges; next time send it with --ack so it doesn't wake anyone.`;
+      }
       for (const to of list) {
         try {
           const pk = await peerKeys(c, to), cc = list.length > 1 ? list : null;
@@ -345,6 +400,22 @@ if (isMain) (async () => {
           console.log(`sent${ack ? ' ack' : ''} to ${disp(c, to)} (id ${j.id})${att ? ' with ' + att.length + ' attachment' + (att.length > 1 ? 's' : '') : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED: ' + (pk ? 'your key is not on the relay yet' : disp(c, to) + ' has no key yet') + ']'}`);
         } catch (e) { failed++; console.log(`FAILED to ${disp(c, to)}: ${e.message}`); }
       }
+      if (failed < list.length) {
+        (GD.g.st.sends[cv.space] ||= []).push(now);
+        const wasWoken = cv.events.some(e => e.dir === 'in' && now - e.t < GD.cfg.convTtlMs);
+        GD.g.record(cv, { t: now, dir: 'out', from: c.handle, ack: ack || cls.ack, rep: cls.rep, final: cls.final, norm: GD.d.rules.norm(text), preview: text.slice(0, 300) });
+        if (cls.final) { await cancelCheckback(c, cv); hint ||= 'marked FINAL: the check-back reminder for this conversation is cancelled. Nothing more to do unless someone replies with new work.'; }
+        else if (!ack && wasWoken && GD.cfg.checkbackMs > 0) { // replied with open work: make sure someone comes back to it
+          await cancelCheckback(c, cv);
+          try {
+            const who = cv.peers.filter(p => p !== c.handle).map(p => disp(c, p)).join(', ');
+            const r = await setReminder(c, c.handle, GD.cfg.checkbackMs, `check-back: your conversation with ${who} is still open (no FINAL/DONE yet). Run poll; if the work is finished send "FINAL <result>", if you are waiting on someone nudge them, otherwise carry on.`);
+            cv.checkback = r.id; hint ||= `check-back reminder ${r.id} set for ${Math.round(GD.cfg.checkbackMs / 1000)}s from now (replaced when you send again, cancelled by FINAL/DONE).`;
+          } catch (e) { hint ||= 'check-back reminder NOT set (' + e.message + '); set one yourself with `relay remind @me in 15m "check back"`.'; }
+        }
+        GD.g.save();
+      }
+      console.log('[relay] NEXT: ' + (hint || (ack ? 'nothing; acks need no reply.' : 'carry on with your work; replies will wake you. Start a message with FINAL or DONE when the work is finished.')));
       if (failed) process.exit(1);
     } else if (cmd === 'remind') {
       const c = need(); const dur = v => { const mm = /^(\d+)([smhd])$/.exec(String(v || '')); return mm ? +mm[1] * { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[mm[2]] : NaN; };
@@ -369,6 +440,7 @@ if (isMain) (async () => {
       const j = await call(c, 'POST', '/remind', { to: wire(to), ...body, ...(every ? { everyMs: every } : {}), ...(pk && c.keysUploaded ? { enc: e2e.encrypt(text, c.handle, to, pk, c.keys) } : { text }) });
       local[j.id] = text; saveLocal();
       console.log(`reminder ${j.id} set for ${disp(c, to)} at ${j.dueAt}${j.everySeconds ? `, then every ${j.everySeconds}s (max ${j.maxFires} times)` : ''}${pk && c.keysUploaded ? ' [end-to-end encrypted]' : ' [UNENCRYPTED]'}. Cancel: relay remind cancel ${j.id}`);
+      console.log(`[relay] NEXT: carry on; it will arrive as a REMINDER message. See all with \`relay remind list\`.`);
     } else if (cmd === 'members') {
       const c = need(); const sp = norm(args[0] || mySpace(c));
       const j = await call(c, 'GET', `/spaces/${sp}/members`);
@@ -434,6 +506,24 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | send --ack <to> <text> (acknowledgement: delivered, never wakes) | remind <@h|@me> in 10m|at <ISO> [--every 5m] <text> | remind list | remind cancel <id> | remind snooze <id> <10m> | poll | inbox [--last N] [--since MIN] (messages already received on this computer) | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else if (cmd === 'status' || cmd === 'help') {
+      const c = loadConf(); const L = await liveState(c);
+      if (cmd === 'help') { console.log(`agentrelay client ${VERSION}. Commands (prefix: node ${path.join(REPO, 'relay.js')} --as <handle>):`); console.log(CMD.helpText()); console.log(''); }
+      for (const l of L) console.log(l);
+    } else if (cmd === 'config') {
+      const c = need(); const sub = args[0], key = args[1], val = args[2];
+      const KEYS = [...G.NUM_KEYS.map(k => 'guard.' + k), 'decision.provider', 'decision.model', 'decision.url', 'decision.command', 'decision.key', 'decision.timeoutMs'];
+      if (sub === 'set' || sub === 'unset') {
+        if (!KEYS.includes(key) || (sub === 'set' && val === undefined)) { console.error('usage: relay config set <key> <value> | config unset <key>. Keys: ' + KEYS.join(', ')); process.exit(2); }
+        const [grp, k] = key.split('.');
+        if (sub === 'set' && grp === 'guard' && !Number.isFinite(+val)) { console.error(key + ' must be a number'); process.exit(2); }
+        if (sub === 'set' && key === 'decision.provider' && !['rules', 'openrouter', 'typesafe', 'url', 'command'].includes(val)) { console.error('decision.provider must be rules, openrouter, typesafe, url or command'); process.exit(2); }
+        c[grp] ||= {}; if (sub === 'set') c[grp][k] = grp === 'guard' ? +val : val; else delete c[grp][k]; saveConf(c);
+        console.log(`${key} ${sub === 'set' ? 'set' + (k === 'key' ? '' : ' to ' + val) : 'reset to default'}`);
+      } else if (sub) { console.error(CMD.byName.config.usage); process.exit(2); }
+      const cfg = G.cfgOf(c), dc = c.decision || {}, d = D.createDecider(dc, cfg);
+      console.log('guardrails: ' + G.NUM_KEYS.map(k => `guard.${k}=${cfg[k]}${c.guard && k in c.guard ? '' : ' (default)'}`).join(', '));
+      console.log(`decision model: ${d.name}${d.configured !== d.name ? ` (${d.configured} configured but no key/url/command found; using rules)` : ''}${dc.model ? ', model ' + dc.model : ''}${dc.key ? ', key set in config' : ''}`);
+    } else { console.error(CMD.usageText()); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

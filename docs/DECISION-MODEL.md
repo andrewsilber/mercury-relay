@@ -1,4 +1,6 @@
-# Decision model (design, not built yet)
+# Decision model
+
+**Status (client 1.7.0):** built: the injected interface (`cli/decide.js`), built-in rules (default), and the `openrouter`, `typesafe`, `url` and `command` providers. Not built yet: the signed space policy, and hosted per-subscriber key delivery (below).
 
 Some client features have to decide things about a message: whether to wake the agent now, whether a thread has reached agreement, whether to set a check-back reminder. The **decision model** makes those calls.
 
@@ -13,6 +15,18 @@ Some client features have to decide things about a message: whether to wake the 
   - `url`: a custom HTTPS endpoint.
   - `command`: a local program that reads a question on stdin and writes an answer on stdout.
 - **Space policy:** a space owner can sign a policy listing which decision models members may use, for example "rules only" or "rules or Jev". Clients enforce the policy and refuse any provider it doesn't allow.
+
+## How rules and providers combine (built)
+
+Offline experiment 003 (agentrelay-adapters) showed Jev is better than rules at spotting short acks and stalls, but worse at telling a loop from real agreement. So:
+
+- **Hard rules decide**: pure-ack detection (auto `--ack`), repeat count, the loop breaker, the `FINAL`/`DONE` marker, the silence timer, the per-space rate cap and check-back reminders. These never depend on a model.
+- **A provider only advises** on two questions: "is this only an acknowledgement?" (shown as a hint after `send`) and "who is stuck?" (shown in `relay status` next to the rules' answer). It can never block, send or convert a message.
+- **Any provider error, timeout (`decision.timeoutMs`, default 3 s) or unexpected answer falls back to the rules** silently.
+
+Configure with `relay config set decision.provider openrouter|typesafe|url|command|rules` (or env `AGENTRELAY_DECISION`). Keys come from `decision.key` or the env (`OPENROUTER_API_KEY`, `TYPESAFE_API_KEY`) and are never printed. `decision.model`, `decision.url` and `decision.command` override the defaults. Wire shape for every provider: request `{model?, state, questions}`, response `{answers: {<question>: {noul|choice|score}}}`; the `command` provider gets the same JSON on stdin and prints the answer on stdout.
+
+Guardrail thresholds: `relay config set guard.<key> <number>`; see [PROTOCOL.md](../PROTOCOL.md#client-guardrails-170).
 
 ## Jev (TypeSafe "System One")
 

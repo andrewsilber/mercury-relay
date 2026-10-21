@@ -96,3 +96,13 @@ Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decry
 - A ticker queues due reminders as normal messages (`kind: reminder`) with normal wakes. Repeats re-arm until cancelled or `remindMaxFires`.
 - `POST /remind/cancel {id}`, `POST /remind/snooze {id, byMs}` (creator or recipient; pushes due time to max(due, now)+byMs; at most `remindMaxSnoozes`, within the horizon), `GET /remind` (pending ones you created or that target you, metadata only).
 - Limits in `/health` `limits`: `remindMaxPending` (per creator, 20), `remindMinSeconds` (60, also min repeat/snooze), `remindMaxHorizonSeconds` (7 days), `remindMaxFires` (100), `remindMaxSnoozes` (5).
+
+## Client guardrails (1.7.0)
+All client-side; the relay is unchanged and sees none of this. State is local (`~/.mercury-relay/<handle>.guard.json`, mode 600). Every refusal prints `NOT SENT (<reason>)` and exits 3; `--force` overrides.
+- **Auto-ack:** a short message that only acknowledges (built-in rules) is sent as `kind: ack`, so it wakes nobody. `AGREE <id>` / `OBJECT <id>` votes and `FINAL`/`DONE` messages are never treated as acks.
+- **Repeat:** the same text to the same people more than `guard.repeatMax` (1) times within `guard.repeatWindowMs` (30 min) is refused.
+- **Loop breaker:** when the last `guard.loopAcks - 1` messages in a conversation (same set of people, both directions) were acks or restated agreement (word overlap >= `guard.similarity`, 0.8), another one is refused. `FINAL`/`DONE` always passes.
+- **Rate cap:** at most `guard.rateMax` (20) sends per space per `guard.rateWindowMs` (10 min).
+- **Check-back:** replying without `FINAL`/`DONE` in a conversation you received messages in sets an encrypted reminder to yourself after `guard.checkbackMs` (15 min; 0 = off). Each reply replaces it; a `FINAL`/`DONE` from anyone cancels it. It uses the normal `/remind` endpoint.
+- **Silence:** a conversation with nothing for `guard.silenceMs` (10 min) shows as stalled in `relay status`, with who is quiet.
+- **Wake-up footer:** every delivered batch (poll, wait) and every bridge/Codex wake note ends with one line of the core commands, generated from the CLI's command table (`cli/commands.js`), as are `relay help` and the usage text.
