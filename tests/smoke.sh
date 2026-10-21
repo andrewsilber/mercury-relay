@@ -48,7 +48,7 @@ node "$ROOT/tests/channel-sim.js" "$R" smoke-b smoke-a || exit 1
 # relay bridge: forwards content-free wake-ups to a local webhook, never reads/acks, coalesces
 $R --as smoke-b poll >/dev/null; $R --as smoke-a poll >/dev/null
 HP=$((PORT + 1)); HOOKLOG="$TMP/hook.log"; : > "$HOOKLOG"
-node -e 'require("http").createServer((q,s)=>{let b="";q.on("data",d=>b+=d);q.on("end",()=>{require("fs").appendFileSync(process.argv[2],JSON.stringify({p:q.url,a:q.headers.authorization||"",b:JSON.parse(b||"{}")})+"\n");s.end("{\"ok\":true}")})}).listen(+process.argv[1],"127.0.0.1")' "$HP" "$HOOKLOG" & HOOKSRV=$!
+node -e 'require("http").createServer((q,s)=>{let b="";q.on("data",d=>b+=d);q.on("end",()=>{require("fs").appendFileSync(process.argv[2],JSON.stringify({p:q.url,a:q.headers.authorization||"",b:JSON.parse(b||"{}"),t:q.headers["x-webhook-timestamp"]||"",s:q.headers["x-webhook-signature-v2"]||"",r:b})+"\n");s.end("{\"ok\":true}")})}).listen(+process.argv[1],"127.0.0.1")' "$HP" "$HOOKLOG" & HOOKSRV=$!
 sleep 0.5
 node "$ROOT/relay.js" --as smoke-b bridge webhook "http://127.0.0.1:$HP/w" --header "Authorization: Bearer hk1" --renudge 0 2>"$TMP/bridge.log" & BR=$!
 sleep 1; $R --as smoke-a send smoke-b "bridge secret $RANDOM" >/dev/null; sleep 0.3; $R --as smoke-a send smoke-b "bridge two" >/dev/null
@@ -64,8 +64,14 @@ sleep 1; $R --as smoke-a send smoke-b "claw ping" >/dev/null
 for i in $(seq 60); do kill -0 $BR 2>/dev/null || break; sleep 0.2; done
 grep -q '"p":"/hooks/wake","a":"Bearer oc-tok","b":{"text":"\[agentrelay\] 1 new end-to-end encrypted relay message(s) for @smoke-b (latest from smoke-a)' "$HOOKLOG" && grep -q '"mode":"now","agentId":"main"' "$HOOKLOG" || { echo "FAIL: bridge openclaw wake: $(cat "$HOOKLOG")"; exit 1; }
 $R --as smoke-b poll | grep -q "claw ping" || { echo "FAIL: openclaw bridge consumed message"; exit 1; }
+: > "$HOOKLOG"
+HERMES_WEBHOOK_SECRET=hs1 HERMES_WEBHOOK_URL="http://127.0.0.1:$HP" node "$ROOT/relay.js" --as smoke-b bridge hermes --once 2>>"$TMP/bridge.log" & BR=$!
+sleep 1; $R --as smoke-a send smoke-b "hermes ping" >/dev/null
+for i in $(seq 60); do kill -0 $BR 2>/dev/null || break; sleep 0.2; done
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n")[0]);const ok=l.p==="/webhooks/agentrelay"&&l.b.event_type==="agentrelay.message"&&l.b.from==="smoke-a"&&l.s===require("crypto").createHmac("sha256","hs1").update(l.t+"."+l.r).digest("hex")&&!/hermes ping/.test(l.r);process.exit(ok?0:1)' "$HOOKLOG" || { echo "FAIL: bridge hermes wake: $(cat "$HOOKLOG")"; exit 1; }
+$R --as smoke-b poll | grep -q "hermes ping" || { echo "FAIL: hermes bridge consumed message"; exit 1; }
 kill $HOOKSRV 2>/dev/null; wait $HOOKSRV 2>/dev/null || true
-echo "PASS: relay bridge webhook/openclaw (content-free, no ack, coalesced)"
+echo "PASS: relay bridge webhook/openclaw/hermes (content-free, no ack, coalesced)"
 # --- end-to-end encryption ---
 efail() { echo "FAIL: $*"; exit 1; }
 SECRET="e2e secret $RANDOM$RANDOM"
