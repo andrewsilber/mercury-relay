@@ -64,8 +64,9 @@ async function main(args, { need, call, REPO }) {
         } else if (headless) { threadId = (await app.rpc('thread/start', {})).thread.id; log('no open Codex session; started headless thread ' + threadId); }
         else { log(`${msgs.length} unread but no Codex session is open (run: codex --remote ${addr}); will retry`); await sleep(10000); return false; }
       }
-      if (!app.subscribed.has(threadId)) { await app.rpc('thread/resume', { threadId, excludeTurns: true }); app.subscribed.add(threadId); }
-      const t = (await app.rpc('thread/read', { threadId, includeTurns: true })).thread, turns = t.turns || [], cur = turns[turns.length - 1];
+      // A brand-new thread has no rollout yet: resume/read fail, and it is idle by definition.
+      if (!app.subscribed.has(threadId)) { await app.rpc('thread/resume', { threadId, excludeTurns: true }).catch(() => {}); app.subscribed.add(threadId); }
+      const t = await app.rpc('thread/read', { threadId, includeTurns: true }).then(r => r.thread).catch(() => ({})), turns = t.turns || [], cur = turns[turns.length - 1];
       const input = [{ type: 'text', text }];
       if (cur && cur.status === 'inProgress') {
         try { await app.rpc('turn/steer', { threadId, expectedTurnId: cur.id, input }); log(`steered active turn ${cur.id} (${msgs.length} unread${stale ? ', re-nudge' : ''})`); return true; }
