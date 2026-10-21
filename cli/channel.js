@@ -107,6 +107,7 @@ async function main(args, { AS, DIR }) {
           if (seen.has(m.id)) continue; // pushed before; the ack must have failed
           const x = await R.openMsgData(c, m);
           await push(x);
+          R.logInbox(c, [{ id: m.id, from: m.from, ts: m.ts, line: `[relay] from ${x.fromShow} at ${x.ts} (id ${m.id}): ${x.error || x.text}` }], 'channel');
           seen.add(m.id); st.delivered.push(m.id); st.recent.push({ id: m.id, from: x.fromShow, ts: x.ts, preview: (x.error || x.text).slice(0, 200) }); saveState();
         }
         if (ids.length) await R.call(c, 'POST', '/ack', { ids }); // ack only after the push was written

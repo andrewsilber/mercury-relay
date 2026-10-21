@@ -86,6 +86,35 @@ for MODE in idle busy; do : > "$CXL"
   kill $FCX 2>/dev/null; wait $FCX 2>/dev/null || true
 done
 echo "PASS: relay bridge webhook/openclaw/hermes + relay codex (steer/start; content-free, no ack, coalesced)"
+# --- no silent loss: lost responses, concurrent pollers, local inbox log ---
+$R --as smoke-b poll >/dev/null
+PP=$((PORT + 3)); BCONF="$HOME/.mercury-relay/smoke-b.json"; PCONF="$TMP/smoke-b-proxy.json"
+node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync(process.argv[1]));c.url=process.argv[2];fs.writeFileSync(process.argv[3],JSON.stringify(c))' "$BCONF" "http://127.0.0.1:$PP" "$PCONF"
+proxy() { node "$ROOT/tests/flaky-proxy.js" $PP "$URL" "$1" & PX=$!; sleep 0.4; }
+# 1) poll response lost (server answered, client got 502): nothing acked, message still queued
+proxy "GET /poll"; $R --as smoke-a send smoke-b "lost-poll-resp" >/dev/null
+MERCURY_RELAY_CONFIG="$PCONF" node "$ROOT/relay.js" poll >/dev/null 2>&1 || true; kill $PX; wait $PX 2>/dev/null || true
+$R --as smoke-b poll | grep -q "lost-poll-resp" || { echo "FAIL: message lost after dropped poll response"; exit 1; }
+# 2) ack response lost (server deleted, client got 502): the message was printed AND is in the local inbox log
+proxy "POST /ack"; $R --as smoke-a send smoke-b "lost-ack-resp" >/dev/null
+MERCURY_RELAY_CONFIG="$PCONF" node "$ROOT/relay.js" poll >/dev/null 2>&1 || true; kill $PX; wait $PX 2>/dev/null || true
+$R --as smoke-b inbox --last 5 | grep -q "lost-ack-resp" || { echo "FAIL: acked message missing from local inbox"; exit 1; }
+$R --as smoke-b poll | grep -q "no new messages (.*received on this computer" || { echo "FAIL: empty poll does not point to local inbox"; exit 1; }
+# 3) a poller that crashes before acking: redelivered (the server never deletes unacked messages)
+$R --as smoke-a send smoke-b "crash-before-ack" >/dev/null
+CR="$(curl -s -H "authorization: Bearer $(node -p "require('$BCONF').token")" "$URL/poll?handle=smoke-b&timeout=0")"; echo "$CR" | grep -q '"messages":\[{' || { echo "FAIL: raw poll"; exit 1; }
+$R --as smoke-b poll | grep -q "crash-before-ack" || { echo "FAIL: unacked message not redelivered"; exit 1; }
+# 4) concurrent pollers: both see the batch; a message arriving between one poller's read and ack is not acked by it
+$R --as smoke-a send smoke-b "conc-1" >/dev/null
+T="$(node -p "require('$BCONF').token")"
+IDS="$(curl -s -H "authorization: Bearer $T" "$URL/poll?handle=smoke-b&timeout=0" | node -pe 'JSON.parse(require("fs").readFileSync(0)).messages.map(m=>m.id).join(",")')"
+$R --as smoke-a send smoke-b "conc-2" >/dev/null
+( $R --as smoke-b poll > "$TMP/pa.out" & $R --as smoke-b poll > "$TMP/pb.out" & wait )
+cat "$TMP/pa.out" "$TMP/pb.out" | grep -q conc-1 && cat "$TMP/pa.out" "$TMP/pb.out" | grep -q conc-2 || { echo "FAIL: concurrent pollers lost a message"; exit 1; }
+curl -s -X POST -H "content-type: application/json" -H "authorization: Bearer $T" -d "{\"ids\":[\"${IDS//,/\",\"}\"]}" "$URL/ack" >/dev/null
+$R --as smoke-b inbox --last 20 | grep -q conc-2 || { echo "FAIL: conc-2 missing from inbox"; exit 1; }
+[ "$(stat -c %a "$HOME/.mercury-relay/inbox/smoke-b.jsonl")" = 600 ] || { echo "FAIL: inbox log not mode 600"; exit 1; }
+echo "PASS: no silent loss (dropped poll/ack responses, crash before ack, concurrent pollers, local inbox log 600)"
 # --- end-to-end encryption ---
 efail() { echo "FAIL: $*"; exit 1; }
 SECRET="e2e secret $RANDOM$RANDOM"

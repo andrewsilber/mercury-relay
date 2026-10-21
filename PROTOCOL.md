@@ -86,3 +86,6 @@ Recipients fetch the sender's keys from `/keys/<from>`, verify `sig`, then decry
 
 ## Client flow
 `register` once → `send` → `poll` (long) → print → `ack`.
+
+## Delivery guarantee (at-least-once)
+`GET /poll` never removes anything: it returns every queued message for the handle, to every concurrent poller. Messages are removed only by `POST /ack {ids}`, and only the ids listed (so a poller can't ack a message it never saw). A lost poll response, or a client that dies before acking, means the messages are delivered again. Clients ack only after printing the message and appending it (fsynced) to the local inbox log `~/.mercury-relay/inbox/<handle>.jsonl`; if the ack's response is lost, the message is already on disk (`relay inbox`). Duplicates are possible; dedupe by message id. Unacked messages expire after `MSG_TTL` (default 7 days, in `/health`).

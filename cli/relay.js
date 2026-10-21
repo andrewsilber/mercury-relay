@@ -90,6 +90,29 @@ globalThis.fetch = async (url, opts = {}) => {
 };
 const files = require('../core/files.js');
 const FILES_DIR = path.join(DIR, 'files');
+// Local inbox log: every message this computer receives for a handle is appended (and fsynced)
+// to ~/.mercury-relay/inbox/<handle>.jsonl BEFORE it is acked on the relay, so a message read by
+// one process (another run, a piped/discarded poll) is never silently gone: `relay inbox` shows it.
+const INBOX_DIR = path.join(DIR, 'inbox');
+const inboxFile = h => path.join(INBOX_DIR, String(h).replace(/[^\w.@-]/g, '_') + '.jsonl');
+function logInbox(c, entries, via) {
+  if (!entries.length) return;
+  fs.mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
+  const fd = fs.openSync(inboxFile(c.handle), 'a', 0o600);
+  try { fs.writeSync(fd, entries.map(e => JSON.stringify({ at: new Date().toISOString(), via, pid: process.pid, ...e }) + '\n').join('')); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+function readInbox(c, { last = 20, sinceMs = 0 } = {}) {
+  let lines = []; try { lines = fs.readFileSync(inboxFile(c.handle), 'utf8').split('\n').filter(Boolean); } catch { return []; }
+  return lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(e => e && (!sinceMs || Date.parse(e.at) >= sinceMs)).slice(-last);
+}
+// Print, log locally, then ack: the ack is the last step, so a lost response or a crash before it
+// just means the relay redelivers (the channel/agents dedupe by id).
+async function deliver(c, msgs, via) {
+  const out = [];
+  for (const m of msgs) { const line = await openMsg(c, m); out.push({ id: m.id, from: m.from, ts: m.ts, line }); console.log(line); }
+  logInbox(c, out, via);
+  if (msgs.length) await call(c, 'POST', '/ack', { ids: msgs.map(m => m.id) });
+}
 // Addresses: "bob" = bob in my space, "bob@acme" = bob in space acme, "bob@public" = public bob. Canonical form matches the relay's keys.
 const mySpace = c => c.space || (c.handle.includes('@') ? c.handle.split('@')[1] : 'public');
 function canon(c, a) {
@@ -154,8 +177,7 @@ async function wait(c, { quiet } = {}) {
     try {
       const j = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=30`);
       if (j.messages.length) {
-        for (const m of j.messages) console.log(await openMsg(c, m));
-        await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) }); // ack after printing
+        await deliver(c, j.messages, 'wait'); // print + local inbox log, then ack
         console.log(`[relay] NEXT: reply now, then IMMEDIATELY run \`node relay.js --as ${c.handle} wait\` again. If you cannot be woken (e.g. Codex), never end your turn while listening.`);
         return;
       }
@@ -169,9 +191,11 @@ async function wait(c, { quiet } = {}) {
 async function poll(c) {
   await ensureKeys(c).catch(() => {});
   const j = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=0`);
-  for (const m of j.messages) console.log(await openMsg(c, m));
-  if (j.messages.length) await call(c, 'POST', '/ack', { ids: j.messages.map(m => m.id) });
-  else console.log('[relay] no new messages');
+  if (j.messages.length) await deliver(c, j.messages, 'poll');
+  else {
+    const recent = readInbox(c, { last: 50, sinceMs: Date.now() - 15 * 60e3 });
+    console.log('[relay] no new messages' + (recent.length ? ` (${recent.length} received on this computer in the last 15 min, possibly by another process: \`node relay.js --as ${c.handle} inbox\`)` : ''));
+  }
   return j.messages.length;
 }
 // One-line verdict: can this agent actually notice replies?
@@ -203,7 +227,7 @@ function nextSteps(c) {
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
-module.exports = { wait, poll, loadConf, ensureKeys, openMsgData, call, need, VERSION };
+module.exports = { logInbox, readInbox, wait, poll, loadConf, ensureKeys, openMsgData, call, need, VERSION };
 const isMain = require.main === module || (require.main && require.main.filename === path.join(__dirname, '..', 'relay.js'));
 if (isMain) (async () => {
   const args = process.argv.slice(2);
@@ -306,8 +330,7 @@ if (isMain) (async () => {
       if (!force) { // newer-message check: unread messages mean you'd reply to a stale view of the conversation
         const pj = await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=0`).catch(() => ({ messages: [] }));
         if (pj.messages && pj.messages.length) {
-          for (const m of pj.messages) console.log(await openMsg(c, m));
-          await call(c, 'POST', '/ack', { ids: pj.messages.map(m => m.id) });
+          await deliver(c, pj.messages, 'send-check');
           console.log(`[relay] NEWER MESSAGES ARRIVED: re-read and resend if still appropriate. Your message was NOT sent. (Use --force to send anyway.)`);
           process.exit(3);
         }
@@ -348,6 +371,12 @@ if (isMain) (async () => {
     } else if (cmd === 'bridge') {
       await require('./bridge.js').main(args, { need, call, REPO });
       return;
+    } else if (cmd === 'inbox') { // local log of received messages (any process on this computer); never touches the relay
+      const c = need(); const k = args.indexOf('--last'); const last = k >= 0 ? Math.max(1, +args[k + 1] || 20) : 20;
+      const k2 = args.indexOf('--since'); const since = k2 >= 0 ? Date.now() - (parseFloat(args[k2 + 1]) || 60) * 60e3 : 0;
+      const es = readInbox(c, { last, sinceMs: since });
+      if (!es.length) console.log('[relay] local inbox is empty' + (since ? ' for that period' : ''));
+      for (const e of es) console.log(`${e.at} via ${e.via} (pid ${e.pid}): ${e.line}`);
     } else if (cmd === 'poll') {
       await poll(need());
     } else if (cmd === 'webhook') {
@@ -379,6 +408,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | inbox [--last N] [--since MIN] (messages already received on this computer) | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();
