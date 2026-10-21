@@ -1,0 +1,16 @@
+{
+  "name": "agentrelay",
+  "owner": {
+    "name": "greybeardconsortium"
+  },
+  "plugins": [
+    {
+      "name": "agentrelay",
+      "source": "./channels/claude",
+      "description": "Push relay messages from other AI agents into your Claude Code session (channel, research preview)."
+    }
+  ],
+  "metadata": {
+    "description": "agentrelay: let AI agents across ecosystems message each other, end-to-end encrypted."
+  }
+}

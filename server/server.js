@@ -14,7 +14,8 @@ const store = DATABASE_URL ? createPgStore({ url: DATABASE_URL, schema: process.
 const parseSize = v => { const m = /^(\d+)\s*([kKmM]?)[bB]?$/.exec(String(v || '').trim()); return m ? +m[1] * ({ k: 1024, m: 1048576 }[m[2].toLowerCase()] || 1) : 0; };
 const parseDur = v => { const m = /^(\d+)([smhd]?)$/.exec(String(v || '').trim()); return m ? +m[1] * ({ s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2]] || 1e3) : 0; };
 const limits = { attachMax: parseSize(process.env.ATTACH_MAX) || 256 * 1024, adminLogMax: +process.env.ADMIN_LOG_MAX || 1000, msgTtlMs: parseDur(process.env.MSG_TTL) || 7 * 86400e3, queueMax: +process.env.QUEUE_MAX || 1000, inviteFailsPerIp: +process.env.INVITE_FAILS_PER_IP || 5, wakeMinIntervalMs: process.env.WAKE_MIN_INTERVAL ? parseDur(process.env.WAKE_MIN_INTERVAL) : 0, wakeRetryMs: process.env.WAKE_RETRY ? parseDur(process.env.WAKE_RETRY) : 10 * 60e3, emailDailyMax: process.env.EMAIL_DAILY_MAX !== undefined ? +process.env.EMAIL_DAILY_MAX : 80 };
-limits.serverVersion = require('../package.json').version; limits.knownClientVersions = String(process.env.KNOWN_CLIENT_VERSIONS || '').split(',').map(v => v.trim()).filter(Boolean);
+const OFFICIAL_PREVIOUS = ['1.0.0']; // earlier official client releases, still shown as official
+limits.serverVersion = require('../package.json').version; limits.knownClientVersions = [...new Set(String((process.env.KNOWN_CLIENT_VERSIONS ?? '') + ',' + OFFICIAL_PREVIOUS.join(',')).split(',').map(v => v.trim()).filter(Boolean))];
 const relay = createRelay({ store, limits, notifier: createNotifier({ resendKey: RESEND_KEY, emailFrom: process.env.EMAIL_FROM || '', ...(process.env.RESEND_API_URL ? { resendUrl: process.env.RESEND_API_URL } : {}) }) });
 const backup = DATABASE_URL ? { enabled: false, reason: 'postgres: use your provider\'s backups plus GET /admin/api/export' } : require('./backup.js')({ getData: () => relay.data, dir: process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(DATA_FILE)), 'backups'), intervalMs: process.env.BACKUP_INTERVAL != null && process.env.BACKUP_INTERVAL !== '' ? parseDur(process.env.BACKUP_INTERVAL) : 6 * 3600e3, keep: Math.max(1, +process.env.BACKUP_KEEP || 14), firstDelayMs: +process.env.BACKUP_FIRST_DELAY_MS || 60e3 });
 // Flush pending writes on deploy/restart so nothing is lost.
@@ -34,7 +35,11 @@ const clientIp = req => { const x = String(req.headers['x-forwarded-for'] || '')
 const reply = (res, r) => json(res, r.code, r.body);
 // Client version negotiation: every response carries X-Relay-Latest / X-Relay-Min-Client; old or unversioned CLIs get 426.
 const LATEST = require('../package.json').version;
-const MIN_DEFAULT = LATEST; // default: clients must be at least this server's own version (CLIENT_MIN_VERSION overrides)
+const vcmpPre = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+// Default floor: the oldest client this server's protocol still supports. Bump it only for breaking client changes
+// (minor releases like 1.1.0 stay compatible with 1.0.x). CLIENT_MIN_VERSION overrides.
+const COMPAT_FLOOR = '1.0.0';
+const MIN_DEFAULT = vcmpPre(COMPAT_FLOOR, LATEST) <= 0 ? COMPAT_FLOOR : LATEST;
 const MIN_CLIENT = /^\d+\.\d+\.\d+$/.test(process.env.CLIENT_MIN_VERSION || '') ? process.env.CLIENT_MIN_VERSION : MIN_DEFAULT;
 const vcmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
 const clientTooOld = v => !/^\d+\.\d+\.\d+/.test(v || '') || vcmp(String(v).match(/^\d+\.\d+\.\d+/)[0], MIN_CLIENT) < 0;

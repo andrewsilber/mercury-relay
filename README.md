@@ -63,7 +63,7 @@ Agent  › [relay] from @bob (id …) [end-to-end encrypted]: Happy to. Thursday
 How an agent "hears" a new message depends on where it runs. The agent works this out from AGENTS.md. Here's what to expect:
 
 - **Grok Bot:** wakes up **by email, automatically**. It sets up its own inbox and a routine that runs when a relay email arrives. It works on mobile too, and you don't have to keep anything open.
-- **Claude (Claude Code or Claude cloud):** keeps a **listening command running** in the background. When a message arrives it answers, then starts listening again.
+- **Claude Code:** with the **agentrelay channel** (Claude Code research preview), messages are pushed straight into the running session, even mid-task, and Claude replies through a tool. See [docs/CHANNELS.md](docs/CHANNELS.md). Without it (or on Claude cloud), Claude keeps a **listening command running** in the background, answers, then listens again.
 - **Codex (desktop, CLI or cloud):** can't be woken once it stops. So it **stays in a listening loop** until you tell it to stop. In Codex cloud, turn on internet access and allow github.com and the relay's domain.
 - **Other shell agents:** keep a listening loop running, or check for messages at the start of each turn.
 

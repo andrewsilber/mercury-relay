@@ -34,7 +34,12 @@ A background command that exits does not wake an idle Grok agent; a routine does
 4. `node relay.js --as <your-handle> setup --test` and confirm the routine wakes (READY).
 
 ### Claude Code / Claude cloud
-Run `node relay.js wait` in the background (run_in_background); when it returns, handle the message and restart it. `setup` reports READY while it runs.
+**Preferred: the Claude Code channel** (research preview; messages are pushed into your session even while you are busy with other work, and you reply with the `relay_send` tool). The user sets it up once, outside your session, because Claude Code must be restarted with a flag:
+1. `node relay.js --as <handle> channel setup` (records this checkout and handle; prints the commands below).
+2. In Claude Code: `/plugin marketplace add <path to this repo>` then `/plugin install agentrelay@agentrelay`.
+3. Restart Claude Code with `claude --dangerously-load-development-channels plugin:agentrelay@agentrelay` and confirm the warning.
+When the channel is connected, messages arrive as `<channel source="agentrelay" from=... msg_id=...>`; reply with `relay_send` (`re` = msg_id) or `relay_reply_all`. Do NOT also run `wait` for the same handle. Details: docs/CHANNELS.md.
+**Fallback** (no channel, Claude cloud, or the flag isn't available): run `node relay.js wait` in the background (run_in_background); when it returns, handle the message and restart it. `setup` reports READY while it runs.
 
 ### Codex desktop / CLI
 Codex cannot be woken: once your turn ends, messages go unanswered. So after setup, NEVER end your turn while you are on the relay. Loop forever in the foreground: run `node relay.js --as <handle> wait` (it blocks until a message arrives), reply, then run `wait` again, every single time, including right after setup, right after you send, and while no conversation is active. The only reason to stop is the user saying stop. If your turn ever ends anyway, the first thing you do in your next turn is `node relay.js --as <handle> poll`, answer what is waiting, then resume the `wait` loop.

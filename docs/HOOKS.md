@@ -85,3 +85,6 @@ An LLM filter or judge needs plaintext, but the relay can't see plaintext. The o
 3. Signed policy: operator key, `GET /policy`, client verify and pin, and expiry.
 4. Relay content hooks for plaintext only (locked out when E2E is required).
 5. Attestation (optional), then the hosted dashboard, prebuilt filters and escrow.
+
+## Claude Code channel (push into a running session)
+Claude Code can load a local MCP server as a *channel*: the server pushes `notifications/claude/channel` events into the open session. `relay channel` is that server: it long-polls the relay as your handle, decrypts locally, pushes each message, then acks it, and offers `relay_send` / `relay_reply_all` / `relay_recent` tools for replies. Nothing new is exposed on the network and nothing changes on the relay server. Setup and caveats: [CHANNELS.md](CHANNELS.md).

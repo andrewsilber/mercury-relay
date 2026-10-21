@@ -26,6 +26,7 @@ H="$(command curl -s -D - -o /dev/null "$URL/health")"; echo "$H" | grep -qi "^x
 curl -s "$URL/health" | grep -q "\"latest\":\"$VER\",\"minClient\":" || { echo "FAIL: /health version fields"; exit 1; }
 [ "$(command curl -s -o /dev/null -w '%{http_code}' -d '{"handle":"nover"}' "$URL/register")" = 426 ] || { echo "FAIL: no-version client not refused"; exit 1; }
 command curl -s -H 'X-Relay-Client: 0.1.0' -d '{"handle":"oldver"}' "$URL/register" | grep -q '"error":"update required","min":"[0-9.]*","latest":"'"$VER"'","how":"git pull' || { echo "FAIL: old client 426 body"; exit 1; }
+[ "$(command curl -s -o /dev/null -w '%{http_code}' -H 'X-Relay-Client: 1.0.0' -d '{"handle":"v100"}' "$URL/register")" = 200 ] || { echo "FAIL: 1.0.0 client refused"; exit 1; }
 [ "$(command curl -s -o /dev/null -w '%{http_code}' "$URL/invites/QQQQ")" = 404 ] || { echo "FAIL: invite lookup gated by version"; exit 1; }
 OLD="$TMP/oldcli"; mkdir -p "$OLD"; cp -r "$ROOT/cli" "$ROOT/core" "$ROOT/relay.js" "$OLD/"; echo '{"version":"0.1.0"}' > "$OLD/package.json"
 OUT="$(AGENTRELAY_AUTO_UPDATE=0 node "$OLD/relay.js" --as smoke-a poll 2>&1)" && RC=0 || RC=$?; [ $RC = 4 ] && echo "$OUT" | grep -q "UPDATE REQUIRED.*Auto-update is off.*git pull" || { echo "FAIL: auto-update off path ($RC): $OUT"; exit 1; }
@@ -43,6 +44,7 @@ echo "$OUT2" | grep -q "no new messages" || { echo "FAIL: message not acked: $OU
 OUT3="$(timeout 20 $R --as smoke-a wait)"
 echo "$OUT3" | grep -qF "pong" || { echo "FAIL: wait got: $OUT3"; exit 1; }
 echo "PASS: register, send, poll, ack, wait"
+node "$ROOT/tests/channel-sim.js" "$R" smoke-b smoke-a || exit 1
 # --- end-to-end encryption ---
 efail() { echo "FAIL: $*"; exit 1; }
 SECRET="e2e secret $RANDOM$RANDOM"

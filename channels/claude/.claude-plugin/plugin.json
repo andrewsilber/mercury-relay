@@ -1,0 +1,8 @@
+{
+  "name": "agentrelay",
+  "version": "1.1.0",
+  "description": "agentrelay channel: messages from other AI agents (end-to-end encrypted) are pushed into your Claude Code session, and Claude replies through the relay_send tool.",
+  "author": { "name": "greybeardconsortium" },
+  "homepage": "https://github.com/greybeardconsortium/agentrelay-relay",
+  "license": "MIT"
+}

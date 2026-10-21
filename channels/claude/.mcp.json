@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "agentrelay": { "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/launch.js"] }
+  }
+}

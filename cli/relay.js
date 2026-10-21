@@ -58,6 +58,7 @@ function checkoutDirty() { // advisory: tells the relay this checkout has local 
 }
 let updateTried = false, noticeShown = false;
 function reExec() {
+  if (process.env.AGENTRELAY_CHANNEL === '1') { console.error('[relay] channel: client updated; exiting so the host restarts this server with the new version (run /mcp to reconnect).'); process.exit(4); }
   const { spawnSync } = require('child_process');
   const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, AGENTRELAY_UPDATED: '1' } });
   process.exit(r.status == null ? 1 : r.status);
@@ -117,6 +118,18 @@ async function peerKeys(c, h) { // fetch + pin (trust on first use)
   if (old && old !== fp) console.error(`[relay] WARNING: ${disp(c, h)}'s key changed (was ${old}, now ${fp}). They may have re-initialized, or the relay may be lying. Confirm with ${disp(c, h)}'s user out of band.`);
   if (old !== fp) { c.peers[h] = fp; saveConf(c); }
   return k;
+}
+// Structured variant for the Claude Code channel: same decryption, trust checks and file saving as openMsg.
+async function openMsgData(c, m) {
+  const base = { id: m.id, from: m.from, fromShow: disp(c, m.from), ts: m.ts, cc: [], re: null, encrypted: !!m.enc, verified: false, text: '', attachments: [], error: null };
+  if (!m.enc) return { ...base, text: String(m.text || ''), attachments: files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]') };
+  try {
+    if (!c.keys) throw new Error('no local keys');
+    const r = e2e.decrypt(m.enc, m.from, c.handle, c.keys, await peerKeys(c, m.from).catch(() => null));
+    const others = r.cc.filter(h => h !== c.handle && h !== m.from);
+    if (r.verified && others.length) { c.lastGroup = { from: m.from, cc: others, id: m.id }; saveConf(c); }
+    return { ...base, cc: others.map(h => disp(c, h)), re: r.verified ? r.re : null, verified: r.verified, text: r.text, attachments: files.saveFiles(FILES_DIR, m.id, r.files, r.verified ? '' : ' [SENDER NOT VERIFIED]') };
+  } catch (e) { return { ...base, error: 'could not decrypt: ' + e.message + '; keys may have changed' }; }
 }
 async function openMsg(c, m) {
   if (!m.enc) return [`[relay] from ${disp(c, m.from)} at ${m.ts} (id ${m.id}) [UNENCRYPTED]: ${m.text}`, ...files.saveFiles(FILES_DIR, m.id, m.files, ' [UNENCRYPTED]')].join('\n');
@@ -190,7 +203,7 @@ function nextSteps(c) {
   console.log('3. Set up wake-up for your platform (AGENTS.md section 2). Grok Bot: EMAIL wake-up (AGENTS.md "Grok Bot"): tagged inbox, email routine, then `node relay.js --as ' + c.handle + ' email <addr>`. No links or pasting. Verify with: node relay.js --as ' + c.handle + ' setup');
   console.log("4. Never overwrite or use another identity's config; always use MERCURY_RELAY_HANDLE=" + c.handle + '.');
 }
-module.exports = { wait, poll, loadConf, ensureKeys };
+module.exports = { wait, poll, loadConf, ensureKeys, openMsgData, call, need, VERSION };
 const isMain = require.main === module || (require.main && require.main.filename === path.join(__dirname, '..', 'relay.js'));
 if (isMain) (async () => {
   const args = process.argv.slice(2);
@@ -327,6 +340,9 @@ if (isMain) (async () => {
       console.log(`Give an agent this sentence: "Clone ${repo}, read AGENTS.md, and join ${j.suggestedName ? 'as @' + j.suggestedName + ' ' : ''}with invite ${j.invite}${pub !== DEFAULT_URL ? ' at ' + pub : ''}."`);
     } else if (cmd === 'wait') {
       if (args.includes('--once')) await poll(need()); else await wait(need());
+    } else if (cmd === 'channel') {
+      await require('./channel.js').main(args, { AS, DIR });
+      return;
     } else if (cmd === 'poll') {
       await poll(need());
     } else if (cmd === 'webhook') {
@@ -358,6 +374,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | channel [setup [--project]] (Claude Code channel MCP server) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();
