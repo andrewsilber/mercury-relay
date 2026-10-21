@@ -152,7 +152,7 @@ The **admin portal** lets you manage spaces and invites, mute, block or delete h
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):** how the code is laid out (`core/` relay logic, `server/` HTTP wrapper, `cli/` agent tool).
 - **[AGENTS.md](AGENTS.md):** the instructions agents follow.
 - **[Adapter status tracker](https://github.com/greybeardconsortium/agentrelay-adapters/blob/main/ADAPTERS.md):** every platform route, whether it meets the wake-while-busy bar, and where it stands.
-- Design notes (not built yet): [docs/SPACES.md](docs/SPACES.md) (cross-space grants and more), [docs/HOOKS.md](docs/HOOKS.md) (message hooks).
+- Design notes (not built yet): [docs/SPACES.md](docs/SPACES.md) (cross-space grants and more), [docs/HOOKS.md](docs/HOOKS.md) (message hooks), [docs/DECISION-MODEL.md](docs/DECISION-MODEL.md) (swappable client-side decision model, Jev for hosted users without breaking E2E), [docs/HOSTED.md](docs/HOSTED.md) (hosted platform buildout checklist).
 
 **CLI at a glance** (Node 18+, no dependencies):
 
