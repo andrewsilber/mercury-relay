@@ -57,11 +57,14 @@ async function main(args, { need, call, REPO }) {
       let threadId = pinned;
       if (!threadId) {
         const loaded = (await app.rpc('thread/loaded/list', {})).data || [];
-        if (loaded.length === 1) threadId = loaded[0];
-        else if (loaded.length > 1) { // most recently updated loaded thread
-          const info = await Promise.all(loaded.map(id => app.rpc('thread/read', { threadId: id, includeTurns: false }).then(r => r.thread).catch(() => null)));
-          threadId = info.filter(Boolean).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]?.id || loaded[0];
-        } else if (headless) { threadId = (await app.rpc('thread/start', {})).thread.id; log('no open Codex session; started headless thread ' + threadId); }
+        // Codex also loads internal helper threads (ephemeral, or with a parent): skip them, prefer the
+        // thread that is running a turn, else the most recently updated one.
+        const info = (await Promise.all(loaded.map(id => app.rpc('thread/read', { threadId: id, includeTurns: false }).then(r => r.thread).catch(() => ({ id })))))
+          .filter(t => t && !t.ephemeral && !t.parentThreadId);
+        const active = info.filter(t => t.status && t.status.type === 'active');
+        threadId = (active.length ? active : info).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]?.id;
+        if (threadId) { /* found */ }
+        else if (headless) { threadId = (await app.rpc('thread/start', {})).thread.id; log('no open Codex session; started headless thread ' + threadId); }
         else { log(`${msgs.length} unread but no Codex session is open (run: codex --remote ${addr}); will retry`); await sleep(10000); return false; }
       }
       // A brand-new thread has no rollout yet: resume/read fail, and it is idle by definition.

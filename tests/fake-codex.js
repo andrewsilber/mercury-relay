@@ -14,7 +14,7 @@ net.createServer(c => {
       if (buf.length < 2) return; let len = buf[1] & 0x7f, off = 2; if (len === 126) { len = buf.readUInt16BE(2); off = 4; }
       if (buf.length < off + 4 + len) return; const m = buf.slice(off, off + 4), p = Buffer.from(buf.slice(off + 4, off + 4 + len)); buf = buf.slice(off + 4 + len);
       for (let i = 0; i < p.length; i++) p[i] ^= m[i & 3]; const j = JSON.parse(p.toString()); if (j.id == null) continue;
-      const r = { initialize: {}, 'thread/loaded/list': { data: ['t1'] }, 'thread/resume': { thread: { id: 't1' } }, 'thread/read': { thread: { id: 't1', turns: [{ id: 'u1', status: mode === 'busy' ? 'inProgress' : 'completed' }] } }, 'turn/steer': { turnId: 'u1' }, 'turn/start': { turn: { id: 'u2' } } }[j.method];
+      const r = j.method === 'thread/read' && j.params.threadId === 't0' ? { thread: { id: 't0', ephemeral: true, updatedAt: 9e9, turns: [] } } : { initialize: {}, 'thread/loaded/list': { data: ['t0', 't1'] }, 'thread/resume': { thread: { id: 't1' } }, 'thread/read': { thread: { id: 't1', updatedAt: 1, turns: [{ id: 'u1', status: mode === 'busy' ? 'inProgress' : 'completed' }] } }, 'turn/steer': { turnId: 'u1' }, 'turn/start': { turn: { id: 'u2' } } }[j.method];
       if (/^turn\//.test(j.method)) fs.appendFileSync(logf, JSON.stringify({ method: j.method, params: j.params }) + '\n');
       c.write(frame(JSON.stringify({ id: j.id, result: r || {} })));
     }

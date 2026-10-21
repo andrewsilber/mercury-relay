@@ -79,6 +79,7 @@ for MODE in idle busy; do : > "$CXL"
   for i in $(seq 60); do kill -0 $BR 2>/dev/null || break; sleep 0.2; done
   WANT=turn/start; [ $MODE = busy ] && WANT=turn/steer
   grep -q "\"method\":\"$WANT\"" "$CXL" && grep -q 'relay message(s) for @smoke-b (latest from smoke-a)' "$CXL" || { echo "FAIL: relay codex $MODE: $(cat "$CXL") $(tail -3 "$TMP/bridge.log")"; exit 1; }
+  grep -q '"threadId":"t0"' "$CXL" && { echo "FAIL: relay codex woke an ephemeral thread"; exit 1; }
   [ $MODE = busy ] && { grep -q '"expectedTurnId":"u1"' "$CXL" || { echo "FAIL: relay codex steer turn id"; exit 1; }; }
   grep -q 'codex secret' "$CXL" && { echo "FAIL: relay codex leaked message text"; exit 1; }
   $R --as smoke-b poll | grep -q "codex secret $MODE" || { echo "FAIL: relay codex consumed message"; exit 1; }
