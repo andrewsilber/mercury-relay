@@ -343,6 +343,8 @@ if (isMain) (async () => {
     } else if (cmd === 'channel') {
       await require('./channel.js').main(args, { AS, DIR });
       return;
+    } else if (cmd === 'codex') {
+      await require('./codex.js').main(args, { need, call, REPO });
     } else if (cmd === 'bridge') {
       await require('./bridge.js').main(args, { need, call, REPO });
       return;
@@ -377,6 +379,6 @@ if (isMain) (async () => {
       if (!a) { console.error('usage: relay email <address> | email --clear'); process.exit(2); }
       const j = await call(c, 'POST', '/email', a === '--clear' ? { email: null } : { email: a });
       console.log(j.email ? `wake-up email set: ${j.email}` : 'wake-up email cleared');
-    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
+    } else { console.error('usage: relay init <handle> [--url URL] | whoami [--all] | use <handle> | setup | [--as <handle>] before any command | send <to>[,<to2>...] [--re <msgId>] [--file <path>]... [--force] <text> | reply-all [--file <path>]... [--force] <text> | space create <name> | space invite <name> [--name <handle> [--require-name]] [--uses N --expires 15m] | space delete <name> | members [space] | wake [--email A] [--webhook URL --webhook-key K] [--mode email-then-webhook|both] | connect-code | wait [--once] | poll | channel [setup [--project]] (Claude Code channel MCP server) | bridge openclaw [--url U] [--agent A] | bridge hermes [--url U] [--route R] | codex [--sock P] [--spawn] [--thread ID] (wake a running Codex session via app-server) | bridge webhook <localUrl> [--header H] [--body JSON] (forward wake-ups to a local webhook) | webhook <url> [--header "Name: value"] | webhook --clear'); process.exit(2); }
   } catch (e) { console.error('error: ' + e.message); process.exit(1); }
 })();

@@ -1,6 +1,6 @@
 {
   "name": "agentrelay-relay",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "agentrelay relay server. The CLI (relay.js) has no dependencies; pg is only loaded when DATABASE_URL is set.",
   "scripts": { "start": "node server.js", "test": "bash tests/smoke.sh" },

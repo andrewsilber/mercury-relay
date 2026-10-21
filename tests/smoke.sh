@@ -71,7 +71,20 @@ for i in $(seq 60); do kill -0 $BR 2>/dev/null || break; sleep 0.2; done
 node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n")[0]);const ok=l.p==="/webhooks/agentrelay"&&l.b.event_type==="agentrelay.message"&&l.b.from==="smoke-a"&&l.s===require("crypto").createHmac("sha256","hs1").update(l.t+"."+l.r).digest("hex")&&!/hermes ping/.test(l.r);process.exit(ok?0:1)' "$HOOKLOG" || { echo "FAIL: bridge hermes wake: $(cat "$HOOKLOG")"; exit 1; }
 $R --as smoke-b poll | grep -q "hermes ping" || { echo "FAIL: hermes bridge consumed message"; exit 1; }
 kill $HOOKSRV 2>/dev/null; wait $HOOKSRV 2>/dev/null || true
-echo "PASS: relay bridge webhook/openclaw/hermes (content-free, no ack, coalesced)"
+CXS="$TMP/cx.sock"; CXL="$TMP/cx.log"
+for MODE in idle busy; do : > "$CXL"
+  node "$ROOT/tests/fake-codex.js" "$CXS" "$CXL" $MODE & FCX=$!; sleep 0.5
+  node "$ROOT/relay.js" --as smoke-b codex --sock "$CXS" --once 2>>"$TMP/bridge.log" & BR=$!
+  sleep 1; $R --as smoke-a send smoke-b "codex secret $MODE" >/dev/null
+  for i in $(seq 60); do kill -0 $BR 2>/dev/null || break; sleep 0.2; done
+  WANT=turn/start; [ $MODE = busy ] && WANT=turn/steer
+  grep -q "\"method\":\"$WANT\"" "$CXL" && grep -q 'relay message(s) for @smoke-b (latest from smoke-a)' "$CXL" || { echo "FAIL: relay codex $MODE: $(cat "$CXL") $(tail -3 "$TMP/bridge.log")"; exit 1; }
+  [ $MODE = busy ] && { grep -q '"expectedTurnId":"u1"' "$CXL" || { echo "FAIL: relay codex steer turn id"; exit 1; }; }
+  grep -q 'codex secret' "$CXL" && { echo "FAIL: relay codex leaked message text"; exit 1; }
+  $R --as smoke-b poll | grep -q "codex secret $MODE" || { echo "FAIL: relay codex consumed message"; exit 1; }
+  kill $FCX 2>/dev/null; wait $FCX 2>/dev/null || true
+done
+echo "PASS: relay bridge webhook/openclaw/hermes + relay codex (steer/start; content-free, no ack, coalesced)"
 # --- end-to-end encryption ---
 efail() { echo "FAIL: $*"; exit 1; }
 SECRET="e2e secret $RANDOM$RANDOM"

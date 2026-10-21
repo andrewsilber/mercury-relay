@@ -46,9 +46,26 @@ async function main(args, { need, call, REPO }) {
     if (tok && !headers.authorization) headers.authorization = 'Bearer ' + tok;
     tmpl = { text: openclawText(c.handle, REPO), mode: 'now', agentId: flag('--agent') || 'main' };
   }
-  const seen = new Map(); let lastWake = 0, backoff = 2000;
   const log = m => console.error(`[relay bridge] ${new Date().toISOString()} ${m}`);
   log(`forwarding wake-ups for @${c.handle} to ${target} (messages are never read or acked here)`);
+  await watch(c, call, { renudge, once, log }, async (msgs, stale) => {
+    const last = msgs[msgs.length - 1];
+    const vars = { to: c.handle, handle: c.handle, from: last.from, count: msgs.length, ts: last.ts };
+    const body = tmpl ? fill(tmpl, vars) : { to: c.handle, from: last.from, ts: last.ts, encrypted: !!last.enc, count: msgs.length };
+    try {
+      const raw = JSON.stringify(body), h = { ...headers };
+      if (hmac) { const t = String(Math.floor(Date.now() / 1000)); h['x-webhook-timestamp'] = t; h['x-webhook-signature-v2'] = crypto.createHmac('sha256', hmac).update(t + '.' + raw).digest('hex'); h['x-request-id'] = crypto.randomUUID(); }
+      const r = await fetch(target, { method: 'POST', headers: h, body: raw });
+      log(`woke ${target}: HTTP ${r.status} (${msgs.length} unread${stale ? ', re-nudge' : ''})`);
+      if (r.ok) return true; await sleep(5000); return false;
+    } catch (e) { log('local webhook unreachable: ' + e.message); await sleep(5000); return false; }
+  });
+}
+// Shared relay watcher: long-polls /poll WITHOUT acking or decrypting and calls onWake(msgs, stale)
+// once per batch of new message ids (coalesced), re-nudging after `renudge` ms if they stay unread.
+// onWake returns true when the wake was delivered.
+async function watch(c, call, { renudge = 600000, once = false, log = () => {} }, onWake) {
+  const seen = new Map(); let lastWake = 0, backoff = 2000;
   for (;;) {
     let msgs;
     try { msgs = (await call(c, 'GET', `/poll?handle=${encodeURIComponent(c.handle)}&timeout=30`)).messages || []; backoff = 2000; }
@@ -57,20 +74,10 @@ async function main(args, { need, call, REPO }) {
     const fresh = msgs.filter(m => !seen.has(m.id));
     const stale = msgs.length && !fresh.length && renudge && Date.now() - lastWake > renudge;
     if (fresh.length || stale) {
-      const last = msgs[msgs.length - 1];
-      const vars = { to: c.handle, handle: c.handle, from: last.from, count: msgs.length, ts: last.ts };
-      const body = tmpl ? fill(tmpl, vars) : { to: c.handle, from: last.from, ts: last.ts, encrypted: !!last.enc, count: msgs.length };
-      try {
-        const raw = JSON.stringify(body), h = { ...headers };
-        if (hmac) { const t = String(Math.floor(Date.now() / 1000)); h['x-webhook-timestamp'] = t; h['x-webhook-signature-v2'] = crypto.createHmac('sha256', hmac).update(t + '.' + raw).digest('hex'); h['x-request-id'] = crypto.randomUUID(); }
-        const r = await fetch(target, { method: 'POST', headers: h, body: raw });
-        log(`woke ${target}: HTTP ${r.status} (${msgs.length} unread${stale ? ', re-nudge' : ''})`);
-        if (r.ok) { for (const m of msgs) seen.set(m.id, 1); lastWake = Date.now(); }
-        else await sleep(5000);
-      } catch (e) { log('local webhook unreachable: ' + e.message); await sleep(5000); }
+      if (await onWake(msgs, !!stale)) { for (const m of msgs) seen.set(m.id, 1); lastWake = Date.now(); }
       if (once) return;
     } else if (msgs.length) await sleep(3000); // already woken for these; wait for the agent to poll them
     else if (once) return;
   }
 }
-module.exports = { main };
+module.exports = { main, watch, sleep };
